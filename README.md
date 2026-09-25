@@ -52,4 +52,6 @@ or source code.
 6. Verify the result at `https://liquipedia.net/geoguessr/User:DialloBOT/test`.
 
 The workflow does not retry HTTP 429 responses and does not publish unchanged
-content.
+content. Every run uploads a short-lived result artifact. Apps Script correlates
+that artifact with its `Liquipedia Log` sheet and records the final result,
+revision id, failed step, or error message.

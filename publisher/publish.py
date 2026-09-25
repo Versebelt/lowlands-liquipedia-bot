@@ -18,6 +18,7 @@ API_URL = "https://liquipedia.net/geoguessr/api.php"
 MANAGED_TEST_MARKER = "<!-- LOWLANDS_LEAGUE_MANAGED_TEST_PAGE -->"
 MIN_REQUEST_INTERVAL_SECONDS = 15.0
 MAX_WIKICODE_BYTES = 200_000
+RESULT_PATH = Path(os.environ.get("LIQUIPEDIA_RESULT_PATH", "publish-result.json"))
 
 
 class PublishError(RuntimeError):
@@ -288,6 +289,13 @@ def append_step_summary(config: Config, user: dict[str, Any], edit: dict[str, An
     Path(summary_path).write_text(text, encoding="utf-8")
 
 
+def write_result(payload: dict[str, Any]) -> None:
+    RESULT_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     try:
         config = load_config()
@@ -295,19 +303,40 @@ def main() -> int:
         user = client.login()
         edit = client.publish()
         append_step_summary(config, user, edit)
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "page": config.page_title,
-                    "result": edit.get("result"),
-                    "revision": edit.get("newrevid") or edit.get("oldrevid"),
-                }
-            )
-        )
+        result = {
+            "ok": True,
+            "page": config.page_title,
+            "result": edit.get("result"),
+            "revision": edit.get("newrevid") or edit.get("oldrevid"),
+            "error": "",
+        }
+        write_result(result)
+        print(json.dumps(result))
         return 0
     except PublishError as exc:
+        write_result(
+            {
+                "ok": False,
+                "page": os.environ.get("INPUT_PAGE_TITLE", ""),
+                "result": "Failed",
+                "revision": None,
+                "error": str(exc),
+            }
+        )
         print(f"::error::{exc}")
+        return 1
+    except Exception as exc:  # Keep an artifact even for unexpected failures.
+        message = f"Unexpected publisher error ({type(exc).__name__}): {exc}"
+        write_result(
+            {
+                "ok": False,
+                "page": os.environ.get("INPUT_PAGE_TITLE", ""),
+                "result": "Failed",
+                "revision": None,
+                "error": message,
+            }
+        )
+        print(f"::error::{message}")
         return 1
 
 
