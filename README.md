@@ -83,3 +83,19 @@ view and send messages in the announcement channel. Discord's
 `allowed_mentions` is restricted to the exact resolved users or configured
 role; arbitrary mentions and `@everyone` are never enabled. Apps Script records
 dispatches and their eventual GitHub result in the `Discord Log` tab.
+
+## Permanent Discord bot
+
+The Docker service in `league_bot` keeps a Discord Gateway connection open and
+registers guild-scoped slash commands immediately:
+
+- `/ping` checks connectivity and latency.
+- `/standings` shows the current playoff top 16.
+- `/player name` shows one player's rank, points, and weeks played.
+- `/week number` shows the seeds, modes, statuses, and deadline for a week.
+
+The service reads only the public spreadsheet and caches results for two minutes.
+Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
+then start it with `docker compose up -d --build`. The container runs as a
+non-root user, restarts automatically, and exposes its health endpoint only on
+localhost at `http://127.0.0.1:8080/health`.
