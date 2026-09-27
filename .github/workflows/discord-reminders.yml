@@ -1,28 +1,31 @@
 name: Discord seed reminders
+run-name: Discord ${{ inputs.kind }} reminder — week ${{ inputs.week }} [${{ inputs.request_id }}]
 
 on:
-  schedule:
-    - cron: "0 9 * * 1"
-      timezone: "Europe/Amsterdam"
-    - cron: "0 20 * * 5"
-      timezone: "Europe/Amsterdam"
-    - cron: "0 10 * * 0"
-      timezone: "Europe/Amsterdam"
   workflow_dispatch:
     inputs:
       kind:
         description: Reminder to send
         required: true
-        default: open
         type: choice
-        options:
-          - open
-          - friday
-          - sunday
-      dry_run:
-        description: Build and log the message without posting to Discord
+        options: [open, friday, sunday]
+      week:
+        description: Lowlands League week number
         required: true
-        default: true
+        type: string
+      players_json:
+        description: Incomplete players supplied by Google Sheets
+        required: false
+        default: "[]"
+        type: string
+      request_id:
+        description: Apps Script request ID for logging
+        required: true
+        type: string
+      dry_run:
+        description: Resolve names and print without posting
+        required: false
+        default: false
         type: boolean
 
 permissions:
@@ -37,12 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+      DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
       DISCORD_GENERIC_ROLE_ID: ${{ secrets.DISCORD_GENERIC_ROLE_ID }}
-      DISCORD_PLAYER_USER_IDS: ${{ secrets.DISCORD_PLAYER_USER_IDS }}
-      LOWLANDS_SEASON_START: "2026-09-07"
-      LOWLANDS_SEASON_WEEKS: "10"
-      LOWLANDS_PUBLIC_SHEET_URL: "https://docs.google.com/spreadsheets/d/15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4"
+      LOWLANDS_PUBLIC_SHEET_URL: https://docs.google.com/spreadsheets/d/15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4
+      INPUT_PLAYERS_JSON: ${{ inputs.players_json }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -52,23 +55,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Determine reminder mode
-        id: mode
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "kind=${{ inputs.kind }}" >> "$GITHUB_OUTPUT"
-            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "kind=auto" >> "$GITHUB_OUTPUT"
-            echo "dry_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Send Discord reminder
         shell: bash
         run: |
-          args=(--kind "${{ steps.mode.outputs.kind }}")
-          if [[ "${{ steps.mode.outputs.dry_run }}" == "true" ]]; then
+          args=(--kind "${{ inputs.kind }}" --week "${{ inputs.week }}" --players-json "$INPUT_PLAYERS_JSON")
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             args+=(--dry-run)
           fi
           python -m reminders.send "${args[@]}"

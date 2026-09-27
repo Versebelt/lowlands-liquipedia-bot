@@ -58,19 +58,28 @@ revision id, failed step, or error message.
 
 ## Discord seed reminders
 
-`.github/workflows/discord-reminders.yml` posts scheduled seed reminders to a
-single Discord channel through a webhook:
+Apps Script determines the current week and dispatches
+`.github/workflows/discord-reminders.yml` at these times:
 
 - Monday 09:00 Europe/Amsterdam: the new week is open.
 - Friday 20:00: reminder mentioning the generic league role.
-- Sunday 10:00: final reminder mentioning every configured player account.
+- Sunday 10:00: final reminder mentioning only active players who still miss
+  one or more enabled seeds according to the latest imported sheet data.
+
+The `Discord` column on the Admin spreadsheet's `Players` tab may contain a
+Discord username, global display name, or server nickname. Matching is exact
+and case-insensitive. The bot refuses to send if a name is missing or matches
+more than one server member.
 
 Configure these GitHub Actions repository secrets:
 
-- `DISCORD_WEBHOOK_URL`: incoming webhook for the announcements channel.
+- `DISCORD_BOT_TOKEN`: token from the Discord Developer Portal.
+- `DISCORD_GUILD_ID`: numeric ID of the Lowlands League server.
+- `DISCORD_CHANNEL_ID`: numeric ID of the announcements channel.
 - `DISCORD_GENERIC_ROLE_ID`: numeric ID of the general reminder role.
-- `DISCORD_PLAYER_USER_IDS`: comma-separated numeric Discord user IDs.
 
-Discord's `allowed_mentions` is restricted to the exact configured role or user
-IDs; arbitrary mentions and `@everyone` are never enabled. A manual workflow
-run is a dry run by default and prints the message without sending it.
+Enable the bot's **Server Members Intent**, then invite it with permission to
+view and send messages in the announcement channel. Discord's
+`allowed_mentions` is restricted to the exact resolved users or configured
+role; arbitrary mentions and `@everyone` are never enabled. Apps Script records
+dispatches and their eventual GitHub result in the `Discord Log` tab.
