@@ -9,7 +9,7 @@ class ReminderTests(unittest.TestCase):
         return Config(
             webhook_url="https://discord.com/api/webhooks/test/test",
             generic_role_id="111",
-            player_role_ids=tuple(players),
+            player_user_ids=tuple(players),
             season_start=date(2026, 9, 7),
             season_weeks=10,
             sheet_url="https://example.com/sheet",
@@ -25,10 +25,13 @@ class ReminderTests(unittest.TestCase):
         self.assertEqual(resolve_kind("auto", datetime(2026, 10, 2, 20)), "friday")
         self.assertEqual(resolve_kind("auto", datetime(2026, 10, 4, 10)), "sunday")
 
-    def test_sunday_mentions_each_player_role(self):
-        content, allowed = build_message("sunday", 4, self.config(("222", "333")))
-        self.assertIn("<@&222> <@&333>", content)
-        self.assertEqual(allowed, ("222", "333"))
+    def test_sunday_mentions_each_player_account(self):
+        content, roles, users = build_message(
+            "sunday", 4, self.config(("222", "333"))
+        )
+        self.assertIn("<@222> <@333>", content)
+        self.assertEqual(roles, ())
+        self.assertEqual(users, ("222", "333"))
 
     def test_sunday_refuses_empty_player_list(self):
         with self.assertRaises(ReminderError):

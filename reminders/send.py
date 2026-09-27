@@ -31,26 +31,26 @@ class ReminderError(RuntimeError):
 class Config:
     webhook_url: str
     generic_role_id: str
-    player_role_ids: tuple[str, ...]
+    player_user_ids: tuple[str, ...]
     season_start: date
     season_weeks: int
     sheet_url: str
 
 
-def clean_role_id(value: str) -> str:
-    role_id = value.strip()
-    if role_id.startswith("<@&") and role_id.endswith(">"):
-        role_id = role_id[3:-1]
-    if role_id and not role_id.isdigit():
-        raise ReminderError(f"Invalid Discord role ID: {value!r}")
-    return role_id
+def clean_snowflake(value: str, mention_prefix: str = "") -> str:
+    snowflake = value.strip()
+    if mention_prefix and snowflake.startswith(mention_prefix) and snowflake.endswith(">"):
+        snowflake = snowflake[len(mention_prefix) : -1]
+    if snowflake and not snowflake.isdigit():
+        raise ReminderError(f"Invalid Discord ID: {value!r}")
+    return snowflake
 
 
-def parse_role_ids(value: str) -> tuple[str, ...]:
+def parse_ids(value: str, mention_prefix: str = "") -> tuple[str, ...]:
     seen: set[str] = set()
     role_ids: list[str] = []
     for item in value.replace("\n", ",").split(","):
-        role_id = clean_role_id(item)
+        role_id = clean_snowflake(item, mention_prefix)
         if role_id and role_id not in seen:
             seen.add(role_id)
             role_ids.append(role_id)
@@ -62,7 +62,9 @@ def load_config() -> Config:
     if not webhook_url.startswith("https://discord.com/api/webhooks/"):
         raise ReminderError("DISCORD_WEBHOOK_URL is missing or invalid.")
 
-    generic_role_id = clean_role_id(os.environ.get("DISCORD_GENERIC_ROLE_ID", ""))
+    generic_role_id = clean_snowflake(
+        os.environ.get("DISCORD_GENERIC_ROLE_ID", ""), "<@&"
+    )
     if not generic_role_id:
         raise ReminderError("DISCORD_GENERIC_ROLE_ID is missing.")
 
@@ -79,8 +81,8 @@ def load_config() -> Config:
     return Config(
         webhook_url=webhook_url,
         generic_role_id=generic_role_id,
-        player_role_ids=parse_role_ids(
-            os.environ.get("DISCORD_PLAYER_ROLE_IDS", "")
+        player_user_ids=parse_ids(
+            os.environ.get("DISCORD_PLAYER_USER_IDS", ""), "<@"
         ),
         season_start=season_start,
         season_weeks=season_weeks,
@@ -104,11 +106,13 @@ def resolve_kind(requested: str, now: datetime) -> str:
         raise ReminderError("Automatic reminder ran on an unsupported weekday.") from exc
 
 
-def role_mentions(role_ids: Iterable[str]) -> str:
-    return " ".join(f"<@&{role_id}>" for role_id in role_ids)
+def user_mentions(user_ids: Iterable[str]) -> str:
+    return " ".join(f"<@{user_id}>" for user_id in user_ids)
 
 
-def build_message(kind: str, week: int, config: Config) -> tuple[str, tuple[str, ...]]:
+def build_message(
+    kind: str, week: int, config: Config
+) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     generic = f"<@&{config.generic_role_id}>"
     if kind == "open":
         content = (
@@ -129,11 +133,11 @@ def build_message(kind: str, week: int, config: Config) -> tuple[str, tuple[str,
         )
         allowed = (config.generic_role_id,)
     elif kind == "sunday":
-        if not config.player_role_ids:
+        if not config.player_user_ids:
             raise ReminderError(
-                "DISCORD_PLAYER_ROLE_IDS is empty; refusing to send the Sunday reminder."
+                "DISCORD_PLAYER_USER_IDS is empty; refusing to send the Sunday reminder."
             )
-        mentions = role_mentions(config.player_role_ids)
+        mentions = user_mentions(config.player_user_ids)
         content = (
             f"{mentions}\n\n"
             f"**Final reminder for Week {week}**\n"
@@ -141,7 +145,8 @@ def build_message(kind: str, week: int, config: Config) -> tuple[str, tuple[str,
             "The deadline is 23:59 (Europe/Amsterdam).\n\n"
             f"**Results and information:** {config.sheet_url}"
         )
-        allowed = config.player_role_ids
+        allowed_roles = ()
+        allowed_users = config.player_user_ids
     else:
         raise ReminderError(f"Unsupported reminder kind: {kind}")
 
@@ -149,16 +154,24 @@ def build_message(kind: str, week: int, config: Config) -> tuple[str, tuple[str,
         raise ReminderError(
             f"Discord message is {len(content)} characters; the maximum is 2000."
         )
-    return content, allowed
+    if kind != "sunday":
+        allowed_roles = allowed
+        allowed_users = ()
+    return content, allowed_roles, allowed_users
 
 
-def payload_for(content: str, allowed_role_ids: Iterable[str]) -> dict[str, object]:
+def payload_for(
+    content: str,
+    allowed_role_ids: Iterable[str],
+    allowed_user_ids: Iterable[str],
+) -> dict[str, object]:
     return {
         "content": content,
         "username": "Lowlands League",
         "allowed_mentions": {
             "parse": [],
             "roles": list(allowed_role_ids),
+            "users": list(allowed_user_ids),
             "replied_user": False,
         },
     }
@@ -209,8 +222,8 @@ def main() -> int:
             return 0
 
         kind = resolve_kind(args.kind, now)
-        content, allowed_roles = build_message(kind, week, config)
-        payload = payload_for(content, allowed_roles)
+        content, allowed_roles, allowed_users = build_message(kind, week, config)
+        payload = payload_for(content, allowed_roles, allowed_users)
         if args.dry_run:
             print(json.dumps(payload, indent=2, ensure_ascii=False))
             return 0
@@ -218,7 +231,7 @@ def main() -> int:
         send_webhook(config.webhook_url, payload)
         print(
             f"Discord reminder sent successfully: kind={kind}, week={week}, "
-            f"role_mentions={len(allowed_roles)}"
+            f"role_mentions={len(allowed_roles)}, user_mentions={len(allowed_users)}"
         )
         return 0
     except ReminderError as exc:

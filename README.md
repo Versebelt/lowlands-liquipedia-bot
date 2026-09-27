@@ -63,14 +63,14 @@ single Discord channel through a webhook:
 
 - Monday 09:00 Europe/Amsterdam: the new week is open.
 - Friday 20:00: reminder mentioning the generic league role.
-- Sunday 10:00: final reminder mentioning every configured player role.
+- Sunday 10:00: final reminder mentioning every configured player account.
 
 Configure these GitHub Actions repository secrets:
 
 - `DISCORD_WEBHOOK_URL`: incoming webhook for the announcements channel.
 - `DISCORD_GENERIC_ROLE_ID`: numeric ID of the general reminder role.
-- `DISCORD_PLAYER_ROLE_IDS`: comma-separated numeric player-role IDs.
+- `DISCORD_PLAYER_USER_IDS`: comma-separated numeric Discord user IDs.
 
-Discord's `allowed_mentions` is restricted to the exact configured role IDs;
-arbitrary mentions and `@everyone` are never enabled. A manual workflow run is
-a dry run by default and prints the message without sending it.
+Discord's `allowed_mentions` is restricted to the exact configured role or user
+IDs; arbitrary mentions and `@everyone` are never enabled. A manual workflow
+run is a dry run by default and prints the message without sending it.

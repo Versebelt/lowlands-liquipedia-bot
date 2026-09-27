@@ -39,7 +39,7 @@ jobs:
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       DISCORD_GENERIC_ROLE_ID: ${{ secrets.DISCORD_GENERIC_ROLE_ID }}
-      DISCORD_PLAYER_ROLE_IDS: ${{ secrets.DISCORD_PLAYER_ROLE_IDS }}
+      DISCORD_PLAYER_USER_IDS: ${{ secrets.DISCORD_PLAYER_USER_IDS }}
       LOWLANDS_SEASON_START: "2026-09-07"
       LOWLANDS_SEASON_WEEKS: "10"
       LOWLANDS_PUBLIC_SHEET_URL: "https://docs.google.com/spreadsheets/d/15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4"
