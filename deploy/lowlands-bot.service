@@ -1,0 +1,23 @@
+[Unit]
+Description=Lowlands League Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lowlands-bot
+Group=lowlands-bot
+WorkingDirectory=/opt/lowlands-bot/app
+EnvironmentFile=/opt/lowlands-bot/bot.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/lowlands-bot/venv/bin/python -m league_bot.bot
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/lowlands-bot
+
+[Install]
+WantedBy=multi-user.target

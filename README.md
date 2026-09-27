@@ -99,3 +99,9 @@ Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
 then start it with `docker compose up -d --build`. The container runs as a
 non-root user, restarts automatically, and exposes its health endpoint only on
 localhost at `http://127.0.0.1:8080/health`.
+
+For an IPv6-only Google Compute Engine deployment, use `deploy/startup.sh` as
+the VM startup script. It installs the bot directly into a Python virtual
+environment so the process can use the host's IPv6 connection without Docker
+bridge configuration. Runtime secrets belong in `/opt/lowlands-bot/bot.env`
+with mode `0600`; they are never stored in VM metadata or Git.
