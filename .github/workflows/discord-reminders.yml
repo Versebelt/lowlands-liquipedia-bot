@@ -1,0 +1,74 @@
+name: Discord seed reminders
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+      timezone: "Europe/Amsterdam"
+    - cron: "0 20 * * 5"
+      timezone: "Europe/Amsterdam"
+    - cron: "0 10 * * 0"
+      timezone: "Europe/Amsterdam"
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: Reminder to send
+        required: true
+        default: open
+        type: choice
+        options:
+          - open
+          - friday
+          - sunday
+      dry_run:
+        description: Build and log the message without posting to Discord
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-seed-reminders
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DISCORD_GENERIC_ROLE_ID: ${{ secrets.DISCORD_GENERIC_ROLE_ID }}
+      DISCORD_PLAYER_ROLE_IDS: ${{ secrets.DISCORD_PLAYER_ROLE_IDS }}
+      LOWLANDS_SEASON_START: "2026-09-07"
+      LOWLANDS_SEASON_WEEKS: "10"
+      LOWLANDS_PUBLIC_SHEET_URL: "https://docs.google.com/spreadsheets/d/15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Determine reminder mode
+        id: mode
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "kind=${{ inputs.kind }}" >> "$GITHUB_OUTPUT"
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=auto" >> "$GITHUB_OUTPUT"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send Discord reminder
+        shell: bash
+        run: |
+          args=(--kind "${{ steps.mode.outputs.kind }}")
+          if [[ "${{ steps.mode.outputs.dry_run }}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          python -m reminders.send "${args[@]}"
