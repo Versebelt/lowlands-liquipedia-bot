@@ -93,10 +93,16 @@ class PublicSheet:
         result = {"url": url, "avatar": "", "country_code": ""}
         try:
             data = json.loads(self._request(f"https://www.geoguessr.com/api/v3/users/{user_id}").decode())
-            image = str((data.get("pin") or {}).get("url") or data.get("customImage") or "").lstrip("/")
+            image = str(
+                data.get("fullBodyPin")
+                or (data.get("avatar") or {}).get("fullBodyPath")
+                or (data.get("pin") or {}).get("url")
+                or data.get("customImage")
+                or ""
+            ).lstrip("/")
             if image:
                 result["avatar"] = (
-                    "https://www.geoguessr.com/images/resize:auto:128:128/gravity:ce/plain/" + image
+                    "https://www.geoguessr.com/images/resize:auto:256:256/gravity:ce/plain/" + image
                 )
             result["country_code"] = str(data.get("countryCode") or "").lower()
         except Exception:
@@ -175,7 +181,7 @@ class PublicSheet:
         partial = [row for row in self.standings() if needle in normalized(row["player"])]
         return partial[0] if len(partial) == 1 else None
 
-    def player_stats(self, query: str) -> dict[str, str] | None:
+    def all_player_stats(self) -> list[dict[str, object]]:
         rows = []
         for source in self.rows("Player Stats"):
             player = first_value(source, ("Player", "Name"))
@@ -203,6 +209,10 @@ class PublicSheet:
         profiles = self.profile_urls()
         for row in rows:
             row["profile_url"] = profiles.get(normalized(row["player"]), "")
+        return rows
+
+    def player_stats(self, query: str) -> dict[str, object] | None:
+        rows = self.all_player_stats()
         needle = normalized(query)
         exact = [row for row in rows if normalized(row["player"]) == needle]
         if exact:

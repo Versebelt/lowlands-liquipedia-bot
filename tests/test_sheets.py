@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from league_bot.sheets import PublicSheet, display_number, first_value, normalized
 
@@ -53,6 +54,16 @@ class SheetTests(unittest.TestCase):
             + sheet.spreadsheet_id
             + "/edit?gid=911011305#gid=911011305",
         )
+
+    def test_profile_prefers_full_body_avatar(self):
+        sheet = PublicSheet()
+        sheet.profile_urls = lambda: {"trekk": "https://www.geoguessr.com/user/123"}
+        sheet._request = lambda url: json.dumps(
+            {"fullBodyPin": "pin/full-body.png", "pin": {"url": "pin/profile.png"}}
+        ).encode()
+        profile = sheet.profile("Trekk")
+        self.assertIn("pin/full-body.png", profile["avatar"])
+        self.assertNotIn("pin/profile.png", profile["avatar"])
 
 
 if __name__ == "__main__":

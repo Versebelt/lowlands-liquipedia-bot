@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import os
+import secrets
 import discord
 from aiohttp import web
 from discord import app_commands
@@ -27,6 +28,9 @@ COMMANDS = (
     ("/compare player_one player_two", "!compare <name 1> | <name 2>", "Compare two players head-to-head"),
     ("/cutoff", "!cutoff", "Show the current playoff qualification line"),
     ("/mode mode", "!mode <Moving|NM|NMPZ>", "Show a mode-specific top five"),
+    ("/form", "!form", "Show the hottest recent form"),
+    ("/country country", "!country <NL|BE|LU>", "Show one country's leaderboard"),
+    ("/randommatch", "!randommatch", "Generate a random league matchup"),
     ("/commands", "!commands", "Show this command overview"),
 )
 ADMIN_COMMANDS = (
@@ -72,6 +76,15 @@ def sparkline(values: list[str]) -> str:
     if low == high:
         return blocks[3] * len(parsed)
     return "".join(blocks[round((value - low) / (high - low) * 7)] for value in parsed)
+
+
+def recent_weekly(row: dict[str, object], count: int = 3) -> list[str]:
+    return [str(value) for value in row.get("weekly", []) if str(value or "").strip()][-count:]
+
+
+def recent_score(row: dict[str, object]) -> float:
+    values = recent_weekly(row)
+    return sum(stat_value(value) for value in values) / len(values) if values else 0.0
 
 
 def country_code(country: str) -> str:
@@ -388,6 +401,64 @@ def mode_embed(mode: str, rows: list[dict[str, str]], page_url: str = PUBLIC_URL
     )
 
 
+def form_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+    ranked = sorted(rows, key=recent_score, reverse=True)[:5]
+    lines = [
+        f"`{index}` {flag(str(row['country']))} **{linked_player(row)}** — "
+        f"{display_number(str(recent_score(row)))} avg · `{sparkline(recent_weekly(row))}`"
+        for index, row in enumerate(ranked, 1)
+    ]
+    embed = discord.Embed(
+        title="Hottest recent form",
+        description="\n".join(lines) or "No recent results available.",
+        color=ORANGE,
+        url=page_url,
+    )
+    embed.set_footer(text="Ranked by average score over each player's last three played weeks")
+    return embed
+
+
+def country_embed(code: str, rows: list[dict[str, str]], page_url: str) -> discord.Embed:
+    selected = [row for row in rows if country_code(row["country"]) == code]
+    lines = [
+        f"`{index}` **{linked_player(row)}** — {display_number(row['points'])} pts"
+        for index, row in enumerate(selected, 1)
+    ]
+    names = {"nl": "Netherlands", "be": "Belgium", "lu": "Luxembourg"}
+    total = sum(stat_value(row["points"]) for row in selected)
+    embed = discord.Embed(
+        title=f"{flag(code)} {names.get(code, code.upper())} leaderboard",
+        description="\n".join(lines) or "No players found.",
+        color=BLUE,
+        url=page_url,
+    )
+    embed.set_footer(text=f"{len(selected)} players · {display_number(str(total))} combined league points")
+    return embed
+
+
+def random_match_embed(left: dict[str, object], right: dict[str, object], page_url: str) -> discord.Embed:
+    def card(row: dict[str, object]) -> str:
+        return (
+            f"{flag(str(row['country']))} **{linked_player(row)}**\n"
+            f"Position **#{row['rank']}**\n"
+            f"League points **{pretty_stat(str(row['points']))}**\n"
+            f"Recent form `{sparkline(recent_weekly(row))}`"
+        )
+
+    gap = abs(stat_value(str(left["points"])) - stat_value(str(right["points"])))
+    embed = discord.Embed(
+        title="Random Lowlands matchup",
+        description="A potential head-to-head generated from the current league field.",
+        color=YELLOW,
+        url=page_url,
+    )
+    embed.add_field(name=str(left["player"]), value=card(left), inline=True)
+    embed.add_field(name="VS", value="⚔️", inline=True)
+    embed.add_field(name=str(right["player"]), value=card(right), inline=True)
+    embed.set_footer(text=f"Current league-points gap: {display_number(str(gap))}")
+    return embed
+
+
 async def handle_prefix_command(message: discord.Message) -> None:
     command, _, argument = message.content[1:].strip().partition(" ")
     command = command.casefold()
@@ -488,6 +559,33 @@ async def handle_prefix_command(message: discord.Message) -> None:
             rows = await asyncio.to_thread(client.sheet.mode_leaderboard, mode)
             page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
             await message.reply(embed=mode_embed(mode, rows, page_url), mention_author=False)
+        elif command == "form":
+            rows, page_url = await asyncio.gather(
+                asyncio.to_thread(client.sheet.all_player_stats),
+                asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+            )
+            await message.reply(embed=form_embed(rows, page_url), mention_author=False)
+        elif command == "country":
+            code = country_code(argument)
+            if code not in {"nl", "be", "lu"}:
+                await message.reply("Usage: `!country <NL|BE|LU>`", mention_author=False)
+                return
+            rows, page_url = await asyncio.gather(
+                asyncio.to_thread(client.sheet.standings),
+                asyncio.to_thread(client.sheet.tab_url, "Standings"),
+            )
+            await message.reply(embed=country_embed(code, rows, page_url), mention_author=False)
+        elif command in {"randommatch", "matchup"}:
+            rows, page_url = await asyncio.gather(
+                asyncio.to_thread(client.sheet.all_player_stats),
+                asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+            )
+            active = [row for row in rows if str(row.get("status") or "").casefold() != "disqualified"]
+            if len(active) < 2:
+                await message.reply("Not enough active players are available.", mention_author=False)
+                return
+            left, right = secrets.SystemRandom().sample(active, 2)
+            await message.reply(embed=random_match_embed(left, right, page_url), mention_author=False)
         elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
@@ -676,6 +774,58 @@ async def mode(interaction: discord.Interaction, mode: app_commands.Choice[str])
             asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
         )
         await interaction.followup.send(embed=mode_embed(mode.value, rows, page_url))
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="form", description="Show the strongest recent Lowlands League form")
+async def form(interaction: discord.Interaction) -> None:
+    await interaction.response.defer()
+    try:
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.all_player_stats),
+            asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+        )
+        await interaction.followup.send(embed=form_embed(rows, page_url))
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="country", description="Show a country-specific Lowlands leaderboard")
+@app_commands.describe(country="Benelux country")
+@app_commands.choices(
+    country=[
+        app_commands.Choice(name="Netherlands", value="nl"),
+        app_commands.Choice(name="Belgium", value="be"),
+        app_commands.Choice(name="Luxembourg", value="lu"),
+    ]
+)
+async def country(interaction: discord.Interaction, country: app_commands.Choice[str]) -> None:
+    await interaction.response.defer()
+    try:
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.standings),
+            asyncio.to_thread(client.sheet.tab_url, "Standings"),
+        )
+        await interaction.followup.send(embed=country_embed(country.value, rows, page_url))
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="randommatch", description="Generate a random Lowlands League matchup")
+async def randommatch(interaction: discord.Interaction) -> None:
+    await interaction.response.defer()
+    try:
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.all_player_stats),
+            asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+        )
+        active = [row for row in rows if str(row.get("status") or "").casefold() != "disqualified"]
+        if len(active) < 2:
+            await interaction.followup.send("Not enough active players are available.", ephemeral=True)
+            return
+        left, right = secrets.SystemRandom().sample(active, 2)
+        await interaction.followup.send(embed=random_match_embed(left, right, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
