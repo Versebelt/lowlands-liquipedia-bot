@@ -79,6 +79,7 @@ class LowlandsClient(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.none()
         intents.guilds = True
+        intents.guild_messages = True
         intents.members = True
         intents.message_content = True
         super().__init__(intents=intents)
