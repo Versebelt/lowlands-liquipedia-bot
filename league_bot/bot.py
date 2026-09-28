@@ -10,6 +10,7 @@ import discord
 from aiohttp import web
 from discord import app_commands
 
+from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
 from .sheets import DEFAULT_SPREADSHEET_ID, PublicSheet, SheetError, display_number
 
 PUBLIC_URL = f"https://docs.google.com/spreadsheets/d/{DEFAULT_SPREADSHEET_ID}"
@@ -27,6 +28,14 @@ COMMANDS = (
     ("/cutoff", "!cutoff", "Show the current playoff qualification line"),
     ("/mode mode", "!mode <Moving|NM|NMPZ>", "Show a mode-specific top five"),
     ("/commands", "!commands", "Show this command overview"),
+)
+ADMIN_COMMANDS = (
+    ("/adminconfig", "!adminconfig", "Show the active reminder configuration"),
+    ("/setupreminders #channel @role", "!setupreminders #channel @role", "Configure channel and role together"),
+    ("/setannouncement #channel", "!setannouncement #channel", "Set the announcement channel"),
+    ("/setreminderrole @role", "!setreminderrole @role", "Set the Friday reminder role"),
+    ("/reminders enabled", "!reminders <on|off>", "Enable or disable automatic reminders"),
+    ("/testreminder", "!testreminder", "Send a mention-free test to the configured channel"),
 )
 
 
@@ -151,6 +160,76 @@ def commands_embed() -> discord.Embed:
     )
     embed.set_footer(text="Slash and ! commands use the same live sheet data")
     return embed
+
+
+def admin_config_embed(config: AdminConfig) -> discord.Embed:
+    channel = f"<#{config.announcement_channel_id}>" if config.announcement_channel_id else "Not configured"
+    role = f"<@&{config.reminder_role_id}>" if config.reminder_role_id else "Not configured"
+    embed = discord.Embed(
+        title="Lowlands League admin configuration",
+        description="These settings are shared by the live bot and every GitHub reminder run.",
+        color=BLUE if config.reminders_enabled else ORANGE,
+    )
+    embed.add_field(name="Announcement channel", value=channel, inline=False)
+    embed.add_field(name="Friday reminder role", value=role, inline=False)
+    embed.add_field(name="Automatic reminders", value="Enabled" if config.reminders_enabled else "Disabled")
+    embed.add_field(
+        name="Schedule",
+        value=(
+            f"Monday {config.monday_time}\nFriday {config.friday_time}\n"
+            f"Sunday {config.sunday_time}\n{config.timezone}"
+        ),
+    )
+    embed.set_footer(text="Only server administrators can change these settings")
+    return embed
+
+
+async def config_channel(guild: discord.Guild, create: bool = False) -> discord.TextChannel | None:
+    channel = discord.utils.get(guild.text_channels, name=CONFIG_CHANNEL_NAME)
+    if channel or not create:
+        return channel
+    me = guild.me
+    overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False)}
+    if me:
+        overwrites[me] = discord.PermissionOverwrite(
+            view_channel=True, send_messages=True, read_message_history=True, manage_channels=True
+        )
+    return await guild.create_text_channel(
+        CONFIG_CHANNEL_NAME,
+        topic=encode_topic(AdminConfig()),
+        overwrites=overwrites,
+        reason="Persistent Lowlands League bot configuration",
+    )
+
+
+async def read_admin_config(guild: discord.Guild) -> AdminConfig:
+    channel = await config_channel(guild)
+    return decode_topic(channel.topic) if channel else AdminConfig()
+
+
+async def write_admin_config(guild: discord.Guild, config: AdminConfig) -> None:
+    channel = await config_channel(guild, create=True)
+    if channel is None:
+        raise RuntimeError("Could not create the configuration channel")
+    await channel.edit(topic=encode_topic(config), reason="Lowlands League admin command")
+
+
+def is_admin(member: discord.Member | discord.User) -> bool:
+    return isinstance(member, discord.Member) and member.guild_permissions.administrator
+
+
+async def send_test_reminder(guild: discord.Guild, config: AdminConfig) -> discord.TextChannel:
+    if not config.announcement_channel_id:
+        raise ValueError("Set an announcement channel first.")
+    channel = guild.get_channel(int(config.announcement_channel_id))
+    if not isinstance(channel, discord.TextChannel):
+        raise ValueError("The configured announcement channel no longer exists.")
+    await channel.send(
+        "**Lowlands League reminder system test**\n"
+        "The central admin configuration is working. No players or roles were mentioned.",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+    return channel
 
 
 def stats_embed(row: dict[str, object]) -> discord.Embed:
@@ -315,12 +394,59 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 return
             rows = await asyncio.to_thread(client.sheet.mode_leaderboard, mode)
             await message.reply(embed=mode_embed(mode, rows), mention_author=False)
+        elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
+            if not is_admin(message.author):
+                await message.reply("This command is only available to server administrators.", mention_author=False)
+                return
+            config = await read_admin_config(message.guild)
+            if command == "adminconfig":
+                await message.reply(embed=admin_config_embed(config), mention_author=False)
+            elif command == "setupreminders":
+                if not message.channel_mentions or not message.role_mentions:
+                    await message.reply("Usage: `!setupreminders #channel @role`", mention_author=False)
+                    return
+                config.announcement_channel_id = str(message.channel_mentions[0].id)
+                config.reminder_role_id = str(message.role_mentions[0].id)
+                await write_admin_config(message.guild, config)
+                await message.reply(
+                    f"Central reminder configuration saved: {message.channel_mentions[0].mention} · {message.role_mentions[0].mention}.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            elif command == "setannouncement":
+                if not message.channel_mentions:
+                    await message.reply("Usage: `!setannouncement #channel`", mention_author=False)
+                    return
+                config.announcement_channel_id = str(message.channel_mentions[0].id)
+                await write_admin_config(message.guild, config)
+                await message.reply(f"Announcement channel set to {message.channel_mentions[0].mention}.", mention_author=False)
+            elif command == "setreminderrole":
+                if not message.role_mentions:
+                    await message.reply("Usage: `!setreminderrole @role`", mention_author=False)
+                    return
+                config.reminder_role_id = str(message.role_mentions[0].id)
+                await write_admin_config(message.guild, config)
+                await message.reply(f"Friday reminder role set to {message.role_mentions[0].mention}.", mention_author=False)
+            elif command == "reminders":
+                state = argument.casefold()
+                if state not in {"on", "off"}:
+                    await message.reply("Usage: `!reminders <on|off>`", mention_author=False)
+                    return
+                config.reminders_enabled = state == "on"
+                await write_admin_config(message.guild, config)
+                await message.reply(f"Automatic reminders are now **{'enabled' if config.reminders_enabled else 'disabled'}**.", mention_author=False)
+            else:
+                channel = await send_test_reminder(message.guild, config)
+                await message.reply(f"Mention-free test sent to {channel.mention}.", mention_author=False)
     except SheetError:
         logging.exception("Sheet prefix command failed")
         await message.reply(
             "The public results could not be loaded right now. Please try again shortly.",
             mention_author=False,
         )
+    except (discord.Forbidden, discord.HTTPException, ValueError, RuntimeError) as exc:
+        logging.exception("Admin prefix command failed")
+        await message.reply(f"Admin configuration failed: {exc}", mention_author=False)
 
 
 async def sheet_failure(interaction: discord.Interaction, error: Exception) -> None:
@@ -439,6 +565,105 @@ async def mode(interaction: discord.Interaction, mode: app_commands.Choice[str])
         await interaction.followup.send(embed=mode_embed(mode.value, rows))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
+
+
+async def admin_failure(interaction: discord.Interaction, error: Exception) -> None:
+    logging.exception("Admin configuration command failed", exc_info=error)
+    message = f"Admin configuration failed: {error}"
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+@client.tree.command(name="adminconfig", description="Show the central reminder configuration")
+@app_commands.default_permissions(administrator=True)
+async def adminconfig(interaction: discord.Interaction) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    config = await read_admin_config(interaction.guild)
+    await interaction.response.send_message(embed=admin_config_embed(config), ephemeral=True)
+
+
+@client.tree.command(name="setannouncement", description="Set the channel used for league announcements")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Announcement channel for all automatic reminders")
+async def setannouncement(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    try:
+        config = await read_admin_config(interaction.guild)
+        config.announcement_channel_id = str(channel.id)
+        await write_admin_config(interaction.guild, config)
+        await interaction.response.send_message(f"Announcement channel set to {channel.mention}.", ephemeral=True)
+    except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+        await admin_failure(interaction, exc)
+
+
+@client.tree.command(name="setupreminders", description="Configure the reminder channel and role together")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Announcement channel", role="Role mentioned by Friday reminders")
+async def setupreminders(interaction: discord.Interaction, channel: discord.TextChannel, role: discord.Role) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    try:
+        config = await read_admin_config(interaction.guild)
+        config.announcement_channel_id = str(channel.id)
+        config.reminder_role_id = str(role.id)
+        await write_admin_config(interaction.guild, config)
+        await interaction.response.send_message(
+            f"Central reminder configuration saved: {channel.mention} · {role.mention}.",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+    except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+        await admin_failure(interaction, exc)
+
+
+@client.tree.command(name="setreminderrole", description="Set the role mentioned by Friday reminders")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(role="Role to mention in the Friday reminder")
+async def setreminderrole(interaction: discord.Interaction, role: discord.Role) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    try:
+        config = await read_admin_config(interaction.guild)
+        config.reminder_role_id = str(role.id)
+        await write_admin_config(interaction.guild, config)
+        await interaction.response.send_message(f"Friday reminder role set to {role.mention}.", ephemeral=True)
+    except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+        await admin_failure(interaction, exc)
+
+
+@client.tree.command(name="reminders", description="Enable or disable automatic league reminders")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(enabled="Whether automatic reminders may be sent")
+async def reminders_toggle(interaction: discord.Interaction, enabled: bool) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    try:
+        config = await read_admin_config(interaction.guild)
+        config.reminders_enabled = enabled
+        await write_admin_config(interaction.guild, config)
+        await interaction.response.send_message(
+            f"Automatic reminders are now **{'enabled' if enabled else 'disabled'}**.", ephemeral=True
+        )
+    except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+        await admin_failure(interaction, exc)
+
+
+@client.tree.command(name="testreminder", description="Send a mention-free test to the announcement channel")
+@app_commands.default_permissions(administrator=True)
+async def testreminder(interaction: discord.Interaction) -> None:
+    if interaction.guild is None or not is_admin(interaction.user):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        config = await read_admin_config(interaction.guild)
+        channel = await send_test_reminder(interaction.guild, config)
+        await interaction.followup.send(f"Mention-free test sent to {channel.mention}.", ephemeral=True)
+    except (discord.Forbidden, discord.HTTPException, ValueError) as exc:
+        await admin_failure(interaction, exc)
 
 
 async def health(_: web.Request) -> web.Response:

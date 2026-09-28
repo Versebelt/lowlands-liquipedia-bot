@@ -108,6 +108,24 @@ Additional visual commands are available in both forms:
 - `/commands` or `!commands` shows the complete in-Discord command guide.
 
 The service reads only the public spreadsheet and caches results for two minutes.
+
+### Central Discord admin configuration
+
+Server administrators can manage reminders without editing GitHub secrets:
+
+- `/setupreminders #channel @role` configures both required destinations atomically.
+- `/adminconfig` shows the active channel, role, status, and schedule.
+- `/setannouncement #channel` and `/setreminderrole @role` change one setting.
+- `/reminders true|false` pauses or resumes all automatic reminders.
+- `/testreminder` sends a mention-free test to the configured channel.
+
+Equivalent `!` commands are available. Settings are stored in the topic of a
+private `lowlands-bot-config` Discord channel, so they survive Render restarts
+and deployments without another database. The bot requires **Manage Channels**
+the first time it creates or later edits this private configuration channel.
+GitHub reminder runs read this central configuration before every send and fall
+back to the existing repository secrets until `/setupreminders` has been run.
+
 Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
 then start it with `docker compose up -d --build`. The container runs as a
 non-root user, restarts automatically, and exposes its health endpoint only on

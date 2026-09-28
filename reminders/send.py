@@ -12,6 +12,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from league_bot.admin_config import CONFIG_CHANNEL_NAME, decode_topic
+
 
 API_BASE = "https://discord.com/api/v10"
 DEFAULT_SHEET_URL = (
@@ -31,6 +33,7 @@ class Config:
     channel_id: str
     generic_role_id: str
     sheet_url: str
+    reminders_enabled: bool = True
 
 
 def clean_snowflake(value: str) -> str:
@@ -41,7 +44,7 @@ def clean_snowflake(value: str) -> str:
 
 
 def load_config() -> Config:
-    config = Config(
+    base = Config(
         bot_token=os.environ.get("DISCORD_BOT_TOKEN", "").strip(),
         guild_id=clean_snowflake(os.environ.get("DISCORD_GUILD_ID", "")),
         channel_id=clean_snowflake(os.environ.get("DISCORD_CHANNEL_ID", "")),
@@ -53,16 +56,38 @@ def load_config() -> Config:
     missing = [
         name
         for name, value in (
-            ("DISCORD_BOT_TOKEN", config.bot_token),
-            ("DISCORD_GUILD_ID", config.guild_id),
-            ("DISCORD_CHANNEL_ID", config.channel_id),
-            ("DISCORD_GENERIC_ROLE_ID", config.generic_role_id),
+            ("DISCORD_BOT_TOKEN", base.bot_token),
+            ("DISCORD_GUILD_ID", base.guild_id),
         )
         if not value
     ]
     if missing:
         raise ReminderError("Missing GitHub secrets: " + ", ".join(missing))
-    return config
+    channels = discord_request(base, "GET", f"/guilds/{base.guild_id}/channels")
+    central = next(
+        (decode_topic(item.get("topic")) for item in channels if item.get("name") == CONFIG_CHANNEL_NAME),
+        None,
+    )
+    if central:
+        base = Config(
+            base.bot_token,
+            base.guild_id,
+            clean_snowflake(central.announcement_channel_id),
+            clean_snowflake(central.reminder_role_id),
+            base.sheet_url,
+            central.reminders_enabled,
+        )
+    missing_delivery = [
+        name for name, value in (
+            ("announcement channel", base.channel_id),
+            ("reminder role", base.generic_role_id),
+        ) if not value
+    ]
+    if missing_delivery:
+        raise ReminderError("Missing central reminder configuration: " + ", ".join(missing_delivery))
+    if not base.reminders_enabled:
+        raise ReminderError("Automatic Discord reminders are disabled in the central admin configuration.")
+    return base
 
 
 def discord_request(
