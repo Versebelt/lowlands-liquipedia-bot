@@ -44,6 +44,7 @@ class SheetTests(unittest.TestCase):
         self.assertEqual(row["rank"], "1")
         self.assertEqual(row["weekly"][:2], ["1.300,0", "1.400,0"])
         self.assertEqual(row["profile_url"], "https://www.geoguessr.com/user/123")
+        self.assertIn("fives", row)
 
     def test_tab_url_uses_discovered_gid(self):
         sheet = PublicSheet()

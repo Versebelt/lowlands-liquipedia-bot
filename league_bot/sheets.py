@@ -26,7 +26,12 @@ def normalized(value: object) -> str:
 
 
 def number(value: object) -> float:
-    raw = str(value or "").strip().replace(",", "")
+    raw = str(value or "").strip().replace(" ", "")
+    if "," in raw and "." in raw:
+        raw = raw.replace(".", "").replace(",", ".") if raw.rfind(",") > raw.rfind(".") else raw.replace(",", "")
+    elif "," in raw:
+        decimals = len(raw.rsplit(",", 1)[1])
+        raw = raw.replace(",", ".") if decimals != 3 else raw.replace(",", "")
     try:
         return float(raw)
     except ValueError:
@@ -193,6 +198,9 @@ class PublicSheet:
                 "country": first_value(source, ("Country",)),
                 "status": first_value(source, ("Status",)),
                 "points": first_value(source, ("League Points",)),
+                "moving": first_value(source, ("Moving",)),
+                "nm": first_value(source, ("NM",)),
+                "nmpz": first_value(source, ("NMPZ",)),
                 "weeks": first_value(source, ("Weeks",)),
                 "average": first_value(source, ("Average / Week",)),
                 "last_three": first_value(source, ("Last 3",)),
@@ -202,6 +210,7 @@ class PublicSheet:
                 "best_mode": first_value(source, ("Best Mode",)),
                 "cutoff_gap": first_value(source, ("Cutoff Gap",)),
                 "streak": first_value(source, ("Top-16 Streak",)),
+                "fives": first_value(source, ("5Ks", "Total 5Ks", "Five Ks")),
                 "weekly": [first_value(source, (f"Week {week}",)) for week in range(1, 11)],
                 "profile_url": "",
                 "avatar": "",

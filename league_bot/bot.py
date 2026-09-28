@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import math
 import os
@@ -19,6 +20,7 @@ BLUE = 0x1E9DDB
 ORANGE = 0xE75325
 YELLOW = 0xEFAC1F
 CHARCOAL = 0x111111
+LINK_PREFIX = "LLBOT_LINK_V1:"
 COMMANDS = (
     ("/ping", "!ping", "Show the bot latency"),
     ("/standings", "!standings", "Browse the complete standings"),
@@ -31,6 +33,15 @@ COMMANDS = (
     ("/form", "!form", "Show the hottest recent form"),
     ("/country country", "!country <NL|BE|LU>", "Show one country's leaderboard"),
     ("/randommatch", "!randommatch", "Generate a random league matchup"),
+    ("/whoami", "!whoami", "Open your personal league dashboard"),
+    ("/linkplayer name", "!linkplayer <name>", "Link your Discord account to a player"),
+    ("/movers", "!movers", "Show this week's biggest rises and falls"),
+    ("/battle", "!battle", "Show the closest playoff-cutoff battle"),
+    ("/nations", "!nations", "Compare Netherlands, Belgium and Luxembourg"),
+    ("/recap", "!recap", "Generate the latest weekly recap"),
+    ("/predict player_one player_two", "!predict <name 1> | <name 2>", "Predict a matchup from league form"),
+    ("/achievements", "!achievements", "Show current season achievement cards"),
+    ("/milestones", "!milestones", "Show records and notable milestones"),
     ("/commands", "!commands", "Show this command overview"),
 )
 ADMIN_COMMANDS = (
@@ -459,6 +470,174 @@ def random_match_embed(left: dict[str, object], right: dict[str, object], page_u
     return embed
 
 
+def weekly_pairs(row: dict[str, object]) -> list[tuple[int, float]]:
+    return [
+        (index, stat_value(str(value)))
+        for index, value in enumerate(row.get("weekly", []), 1)
+        if str(value or "").strip()
+    ]
+
+
+def movers_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+    changes = []
+    for row in rows:
+        weeks = weekly_pairs(row)
+        if len(weeks) >= 2:
+            changes.append((weeks[-1][1] - weeks[-2][1], row, weeks[-2][0], weeks[-1][0]))
+    risers = sorted(changes, key=lambda item: item[0], reverse=True)[:3]
+    fallers = sorted(changes, key=lambda item: item[0])[:3]
+    def lines(items: list[tuple[float, dict[str, object], int, int]]) -> str:
+        return "\n".join(
+            f"{flag(str(row['country']))} **{linked_player(row)}** · {delta:+,.0f} pts"
+            for delta, row, _, _ in items
+        ) or "Not enough completed weeks yet."
+    embed = discord.Embed(title="Weekly movers", description="Change versus each player's previous played week.", color=ORANGE, url=page_url)
+    embed.add_field(name="Rising", value=lines(risers), inline=True)
+    embed.add_field(name="Falling", value=lines(fallers), inline=True)
+    return embed
+
+
+def battle_embed(rows: list[dict[str, str]], page_url: str) -> discord.Embed:
+    candidates = rows[max(0, 11):min(len(rows), 20)]
+    pairs = list(zip(candidates, candidates[1:]))
+    if not pairs:
+        return discord.Embed(title="Closest cutoff battle", description="Not enough standings data.", color=YELLOW)
+    left, right = min(pairs, key=lambda pair: abs(stat_value(pair[0]["points"]) - stat_value(pair[1]["points"])))
+    gap = abs(stat_value(left["points"]) - stat_value(right["points"]))
+    embed = discord.Embed(title="Closest battle around the cutoff", description="The tightest adjacent points gap from positions 12–20.", color=YELLOW, url=page_url)
+    embed.add_field(name=f"#{left['rank']} {left['player']}", value=f"{flag(left['country'])} {display_number(left['points'])} pts")
+    embed.add_field(name=f"#{right['rank']} {right['player']}", value=f"{flag(right['country'])} {display_number(right['points'])} pts")
+    embed.set_footer(text=f"Gap: {display_number(str(gap))} points")
+    return embed
+
+
+def nations_embed(rows: list[dict[str, str]], page_url: str) -> discord.Embed:
+    names = {"nl": "Netherlands", "be": "Belgium", "lu": "Luxembourg"}
+    results = []
+    for code, name in names.items():
+        players = [row for row in rows if country_code(row["country"]) == code]
+        top = sorted((stat_value(row["points"]) for row in players), reverse=True)[:5]
+        results.append((sum(top), code, name, len(players), len(top)))
+    results.sort(reverse=True)
+    lines = [
+        f"`{index}` {flag(code)} **{name}** — {display_number(str(total))} pts · {count} players"
+        for index, (total, code, name, count, _) in enumerate(results, 1)
+    ]
+    embed = discord.Embed(title="Benelux Nations Cup", description="\n".join(lines), color=BLUE, url=page_url)
+    embed.set_footer(text="Fair score: combined league points of each country's best five players")
+    return embed
+
+
+def latest_week(rows: list[dict[str, object]]) -> int:
+    return max((week for row in rows for week, _ in weekly_pairs(row)), default=0)
+
+
+def recap_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+    week = latest_week(rows)
+    ranked = sorted(
+        [(stat_value(str(row.get("weekly", [""] * 10)[week - 1])), row) for row in rows if week and str(row.get("weekly", [""] * 10)[week - 1]).strip()],
+        reverse=True,
+        key=lambda item: item[0],
+    )
+    podium = "\n".join(
+        f"`{index}` {flag(str(row['country']))} **{linked_player(row)}** — {display_number(str(score))} pts"
+        for index, (score, row) in enumerate(ranked[:3], 1)
+    )
+    embed = discord.Embed(title=f"Week {week} recap" if week else "Weekly recap", description=podium or "No completed weekly results yet.", color=ORANGE, url=page_url)
+    if ranked:
+        countries: dict[str, float] = {}
+        for score, row in ranked:
+            code = country_code(str(row["country"]))
+            countries[code] = countries.get(code, 0) + score
+        nation = max(countries, key=countries.get)
+        embed.add_field(name="Winning nation", value=f"{flag(nation)} {nation.upper()} · {display_number(str(countries[nation]))} combined pts")
+        embed.add_field(name="Players recorded", value=str(len(ranked)))
+    return embed
+
+
+def prediction_embed(left: dict[str, object], right: dict[str, object], page_url: str) -> discord.Embed:
+    def power(row: dict[str, object]) -> float:
+        return stat_value(str(row.get("points"))) * 0.55 + recent_score(row) * 0.45
+    lp, rp = power(left), power(right)
+    probability = 50.0 if lp + rp <= 0 else lp / (lp + rp) * 100
+    favorite, chance = (left, probability) if probability >= 50 else (right, 100 - probability)
+    embed = discord.Embed(title=f"{left['player']} vs {right['player']}", description=f"Statistical favorite: **{favorite['player']}** · **{chance:.0f}%**", color=YELLOW, url=page_url)
+    embed.add_field(name=str(left["player"]), value=f"{flag(str(left['country']))} {probability:.0f}%\nForm `{sparkline(recent_weekly(left))}`")
+    embed.add_field(name=str(right["player"]), value=f"{flag(str(right['country']))} {100-probability:.0f}%\nForm `{sparkline(recent_weekly(right))}`")
+    embed.set_footer(text="Model: 55% league points, 45% recent three-week average · entertainment only")
+    return embed
+
+
+def achievements_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+    active = [row for row in rows if str(row.get("status") or "").casefold() != "disqualified"]
+    embed = discord.Embed(title="Season achievement cards", color=ORANGE, url=page_url)
+    if not active:
+        embed.description = "No player statistics available."
+        return embed
+    leader = max(active, key=lambda row: stat_value(str(row.get("points"))))
+    form = max(active, key=recent_score)
+    nmpz = max(active, key=lambda row: stat_value(str(row.get("nmpz"))))
+    embed.add_field(name="League leader", value=f"{flag(str(leader['country']))} **{linked_player(leader)}**\n{pretty_stat(str(leader['points']))} pts")
+    embed.add_field(name="Form player", value=f"{flag(str(form['country']))} **{linked_player(form)}**\n{display_number(str(recent_score(form)))} recent avg")
+    embed.add_field(name="NMPZ specialist", value=f"{flag(str(nmpz['country']))} **{linked_player(nmpz)}**\n{pretty_stat(str(nmpz.get('nmpz')))} pts")
+    five_rows = [row for row in active if stat_value(str(row.get("fives"))) > 0]
+    if five_rows:
+        five = max(five_rows, key=lambda row: stat_value(str(row.get("fives"))))
+        embed.add_field(name="5K machine", value=f"**{linked_player(five)}** · {pretty_stat(str(five['fives']))} 5Ks")
+    return embed
+
+
+def milestones_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+    played = [(score, week, row) for row in rows for week, score in weekly_pairs(row)]
+    embed = discord.Embed(title="League records & milestones", color=BLUE, url=page_url)
+    if played:
+        score, week, row = max(played, key=lambda item: item[0])
+        embed.add_field(name="Best weekly score", value=f"**{linked_player(row)}** · {display_number(str(score))} · Week {week}", inline=False)
+    perfect = [row for row in rows if stat_value(str(row.get("fives"))) > 0]
+    embed.add_field(name="Players with a recorded 5K", value=str(len(perfect)))
+    embed.add_field(name="Weeks completed", value=str(latest_week(rows)))
+    embed.add_field(name="Active statistical profiles", value=str(len(rows)))
+    return embed
+
+
+async def link_channel(guild: discord.Guild, create: bool = False) -> discord.TextChannel | None:
+    return await config_channel(guild, create=create)
+
+
+async def linked_player_name(guild: discord.Guild, user_id: int) -> str:
+    channel = await link_channel(guild)
+    if not channel:
+        return ""
+    marker = f"{LINK_PREFIX}{user_id}:"
+    async for message in channel.history(limit=500):
+        if message.content.startswith(marker):
+            try:
+                return base64.urlsafe_b64decode(message.content[len(marker):] + "===").decode()
+            except (ValueError, UnicodeDecodeError):
+                return ""
+    return ""
+
+
+async def save_player_link(guild: discord.Guild, user_id: int, player: str) -> None:
+    channel = await link_channel(guild, create=True)
+    if not channel:
+        raise RuntimeError("Could not create the private player-link registry.")
+    token = base64.urlsafe_b64encode(player.encode()).decode().rstrip("=")
+    await channel.send(f"{LINK_PREFIX}{user_id}:{token}")
+
+
+async def resolved_member_player(guild: discord.Guild, member: discord.Member | discord.User) -> dict[str, object] | None:
+    linked = await linked_player_name(guild, member.id)
+    if linked:
+        return await asyncio.to_thread(client.sheet.player_stats, linked)
+    for name in (getattr(member, "display_name", ""), getattr(member, "global_name", ""), member.name):
+        if name:
+            row = await asyncio.to_thread(client.sheet.player_stats, name)
+            if row:
+                return row
+    return None
+
+
 async def handle_prefix_command(message: discord.Message) -> None:
     command, _, argument = message.content[1:].strip().partition(" ")
     command = command.casefold()
@@ -586,6 +765,52 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 return
             left, right = secrets.SystemRandom().sample(active, 2)
             await message.reply(embed=random_match_embed(left, right, page_url), mention_author=False)
+        elif command == "linkplayer":
+            if not argument:
+                await message.reply("Usage: `!linkplayer <player name>`", mention_author=False)
+                return
+            row = await asyncio.to_thread(client.sheet.player_stats, argument)
+            if not row:
+                await message.reply("No unique player match was found.", mention_author=False)
+                return
+            await save_player_link(message.guild, message.author.id, str(row["player"]))
+            await message.reply(f"Your Discord account is now linked to **{row['player']}**.", mention_author=False)
+        elif command == "whoami":
+            row = await resolved_member_player(message.guild, message.author)
+            if not row:
+                await message.reply("I could not match you yet. Use `!linkplayer <player name>` once.", mention_author=False)
+                return
+            row = await asyncio.to_thread(enrich_profile, row)
+            await message.reply(embed=stats_embed(row), mention_author=False)
+        elif command in {"movers", "battle", "nations", "recap", "achievements", "milestones"}:
+            stats_rows, standings_rows, page_url = await asyncio.gather(
+                asyncio.to_thread(client.sheet.all_player_stats),
+                asyncio.to_thread(client.sheet.standings),
+                asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+            )
+            builders = {
+                "movers": lambda: movers_embed(stats_rows, page_url),
+                "battle": lambda: battle_embed(standings_rows, page_url),
+                "nations": lambda: nations_embed(standings_rows, page_url),
+                "recap": lambda: recap_embed(stats_rows, page_url),
+                "achievements": lambda: achievements_embed(stats_rows, page_url),
+                "milestones": lambda: milestones_embed(stats_rows, page_url),
+            }
+            await message.reply(embed=builders[command](), mention_author=False)
+        elif command in {"predict", "prediction"}:
+            names = [name.strip() for name in argument.split("|", 1)]
+            if len(names) != 2 or not all(names):
+                await message.reply("Usage: `!predict <player 1> | <player 2>`", mention_author=False)
+                return
+            left, right = await asyncio.gather(
+                asyncio.to_thread(client.sheet.player_stats, names[0]),
+                asyncio.to_thread(client.sheet.player_stats, names[1]),
+            )
+            if not left or not right:
+                await message.reply("One or both player names were not a unique match.", mention_author=False)
+                return
+            page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
+            await message.reply(embed=prediction_embed(left, right, page_url), mention_author=False)
         elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
@@ -826,6 +1051,108 @@ async def randommatch(interaction: discord.Interaction) -> None:
             return
         left, right = secrets.SystemRandom().sample(active, 2)
         await interaction.followup.send(embed=random_match_embed(left, right, page_url))
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="linkplayer", description="Link your Discord account to a Lowlands player")
+@app_commands.describe(name="Your player name in the league sheet")
+async def linkplayer(interaction: discord.Interaction, name: str) -> None:
+    if interaction.guild is None:
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        row = await asyncio.to_thread(client.sheet.player_stats, name)
+        if not row:
+            await interaction.followup.send("No unique player match was found.", ephemeral=True)
+            return
+        await save_player_link(interaction.guild, interaction.user.id, str(row["player"]))
+        await interaction.followup.send(f"Your Discord account is now linked to **{row['player']}**.", ephemeral=True)
+    except (SheetError, discord.HTTPException, RuntimeError) as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="whoami", description="Show your personal Lowlands League dashboard")
+async def whoami(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        row = await resolved_member_player(interaction.guild, interaction.user)
+        if not row:
+            await interaction.followup.send("I could not match you yet. Use `/linkplayer` once.", ephemeral=True)
+            return
+        row = await asyncio.to_thread(enrich_profile, row)
+        await interaction.followup.send(embed=stats_embed(row), ephemeral=True)
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+async def send_overview(interaction: discord.Interaction, kind: str) -> None:
+    await interaction.response.defer()
+    try:
+        stats_rows, standings_rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.all_player_stats),
+            asyncio.to_thread(client.sheet.standings),
+            asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+        )
+        builders = {
+            "movers": lambda: movers_embed(stats_rows, page_url),
+            "battle": lambda: battle_embed(standings_rows, page_url),
+            "nations": lambda: nations_embed(standings_rows, page_url),
+            "recap": lambda: recap_embed(stats_rows, page_url),
+            "achievements": lambda: achievements_embed(stats_rows, page_url),
+            "milestones": lambda: milestones_embed(stats_rows, page_url),
+        }
+        await interaction.followup.send(embed=builders[kind]())
+    except SheetError as exc:
+        await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="movers", description="Show the biggest week-on-week rises and falls")
+async def movers(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "movers")
+
+
+@client.tree.command(name="battle", description="Show the closest battle around the playoff cutoff")
+async def battle(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "battle")
+
+
+@client.tree.command(name="nations", description="Compare Netherlands, Belgium and Luxembourg")
+async def nations(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "nations")
+
+
+@client.tree.command(name="recap", description="Generate the latest Lowlands League weekly recap")
+async def recap(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "recap")
+
+
+@client.tree.command(name="achievements", description="Show current season achievement cards")
+async def achievements(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "achievements")
+
+
+@client.tree.command(name="milestones", description="Show current league records and milestones")
+async def milestones(interaction: discord.Interaction) -> None:
+    await send_overview(interaction, "milestones")
+
+
+@client.tree.command(name="predict", description="Predict a playoff matchup from current league form")
+@app_commands.describe(player_one="First player", player_two="Second player")
+async def predict(interaction: discord.Interaction, player_one: str, player_two: str) -> None:
+    await interaction.response.defer()
+    try:
+        left, right = await asyncio.gather(
+            asyncio.to_thread(client.sheet.player_stats, player_one),
+            asyncio.to_thread(client.sheet.player_stats, player_two),
+        )
+        if not left or not right:
+            await interaction.followup.send("One or both player names were not a unique match.", ephemeral=True)
+            return
+        page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
+        await interaction.followup.send(embed=prediction_embed(left, right, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from league_bot.admin_config import CONFIG_CHANNEL_NAME, decode_topic
+from league_bot.sheets import PublicSheet, display_number, number
 
 
 API_BASE = "https://discord.com/api/v10"
@@ -238,6 +239,34 @@ def build_payload(
             f"**Results and information:** {config.sheet_url}"
         )
         allowed_mentions = {"parse": [], "roles": [], "users": user_ids}
+    elif kind == "recap":
+        stats = PublicSheet().all_player_stats()
+        completed = [
+            index
+            for row in stats
+            for index, value in enumerate(row.get("weekly", []), 1)
+            if str(value or "").strip()
+        ]
+        latest = max(completed, default=0)
+        ranked = sorted(
+            (
+                (number(row.get("weekly", [""] * 10)[latest - 1]), row)
+                for row in stats
+                if latest and str(row.get("weekly", [""] * 10)[latest - 1]).strip()
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        podium = "\n".join(
+            f"{index}. **{row['player']}** — {display_number(score)} points"
+            for index, (score, row) in enumerate(ranked[:3], 1)
+        )
+        content = (
+            f"**Week {latest} recap**\n"
+            f"{podium or 'No completed weekly results were found.'}\n\n"
+            f"**Full results and statistics:** {config.sheet_url}"
+        )
+        allowed_mentions = {"parse": [], "roles": [], "users": []}
     else:
         raise ReminderError(f"Unsupported reminder kind: {kind}")
 
@@ -264,7 +293,7 @@ def parse_players(value: str) -> list[dict[str, object]]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--kind", choices=("test", "open", "friday", "sunday"), required=True
+        "--kind", choices=("test", "open", "friday", "sunday", "recap"), required=True
     )
     parser.add_argument("--week", type=int, required=True)
     parser.add_argument("--players-json", default="[]")

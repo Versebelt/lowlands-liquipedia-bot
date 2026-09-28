@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from reminders.send import Config, ReminderError, build_payload, parse_players, resolve_players
 
@@ -49,6 +50,17 @@ class ReminderTests(unittest.TestCase):
         payload = build_payload("friday", 4, self.config(), [])
         self.assertIn("<@&300>", payload["content"])
         self.assertEqual(payload["allowed_mentions"]["roles"], ["300"])
+
+    @patch("reminders.send.PublicSheet")
+    def test_recap_payload_uses_latest_completed_week(self, sheet_class):
+        sheet_class.return_value.all_player_stats.return_value = [
+            {"player": "Trekk", "weekly": ["100", "250"]},
+            {"player": "Matedu", "weekly": ["200", "150"]},
+        ]
+        payload = build_payload("recap", 2, self.config(), [])
+        self.assertIn("Week 2 recap", payload["content"])
+        self.assertIn("Trekk", payload["content"])
+        self.assertEqual(payload["allowed_mentions"]["users"], [])
 
     def test_parse_players_requires_list_of_objects(self):
         self.assertEqual(parse_players('[{"player":"A"}]')[0]["player"], "A")

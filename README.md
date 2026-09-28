@@ -67,6 +67,7 @@ checks the Europe/Amsterdam clock instead of relying on Apps Script's approximat
 - Friday 20:00: reminder mentioning the generic league role.
 - Sunday 10:00: final reminder mentioning only active players who still miss
   one or more enabled seeds according to the latest imported sheet data.
+- Monday 00:10: automated recap of the week that just closed.
 
 The `Discord` column on the Admin spreadsheet's `Players` tab may contain a
 Discord username, global display name, or server nickname. Matching is exact
@@ -98,6 +99,12 @@ registers guild-scoped slash commands immediately:
 - `/ping` checks connectivity and latency.
 - `/standings` shows the current playoff top 16.
 - `/player name` shows one player's rank, points, and weeks played.
+- `/linkplayer name` links a Discord account to its league player; `/whoami`
+  then opens a private personal dashboard.
+- `/movers`, `/battle`, `/nations`, and `/recap` show weekly movement, the
+  closest cutoff fight, the Benelux nations table, and the latest week recap.
+- `/predict player_one player_two` produces a form-based matchup prediction.
+- `/achievements` and `/milestones` show live season awards and records.
 - `/week number` shows the seeds, modes, statuses, and deadline for a week.
 
 The same public commands also work with a message prefix: `!ping`,
