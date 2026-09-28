@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import re
 import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Iterable
+
+import openpyxl
 
 DEFAULT_SPREADSHEET_ID = "15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4"
 
@@ -49,6 +53,77 @@ class PublicSheet:
 
     def __post_init__(self) -> None:
         self._cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
+        self._profile_cache: tuple[float, dict[str, str]] | None = None
+        self._user_cache: dict[str, tuple[float, dict[str, str]]] = {}
+        self._tab_cache: tuple[float, dict[str, str]] | None = None
+
+    def _request(self, url: str) -> bytes:
+        request = urllib.request.Request(url, headers={"User-Agent": "Lowlands-League-Bot/2.0"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read()
+
+    def profile_urls(self) -> dict[str, str]:
+        if self._profile_cache and time.monotonic() - self._profile_cache[0] < 600:
+            return self._profile_cache[1]
+        url = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/export?format=xlsx"
+        try:
+            workbook = openpyxl.load_workbook(io.BytesIO(self._request(url)), read_only=False, data_only=False)
+            sheet = workbook["Standings"]
+            profiles = {}
+            for row in range(2, sheet.max_row + 1):
+                cell = sheet.cell(row, 3)
+                if cell.value and cell.hyperlink and cell.hyperlink.target:
+                    profiles[normalized(cell.value)] = cell.hyperlink.target
+        except Exception:
+            profiles = {}
+        self._profile_cache = (time.monotonic(), profiles)
+        return profiles
+
+    def profile(self, player: str) -> dict[str, str]:
+        url = self.profile_urls().get(normalized(player), "")
+        if not url:
+            return {"url": "", "avatar": "", "country_code": ""}
+        match = re.search(r"/user/([^/?#]+)", url)
+        if not match:
+            return {"url": url, "avatar": "", "country_code": ""}
+        user_id = urllib.parse.unquote(match.group(1))
+        cached = self._user_cache.get(user_id)
+        if cached and time.monotonic() - cached[0] < 900:
+            return cached[1]
+        result = {"url": url, "avatar": "", "country_code": ""}
+        try:
+            data = json.loads(self._request(f"https://www.geoguessr.com/api/v3/users/{user_id}").decode())
+            image = str((data.get("pin") or {}).get("url") or data.get("customImage") or "").lstrip("/")
+            if image:
+                result["avatar"] = (
+                    "https://www.geoguessr.com/images/resize:auto:128:128/gravity:ce/plain/" + image
+                )
+            result["country_code"] = str(data.get("countryCode") or "").lower()
+        except Exception:
+            pass
+        self._user_cache[user_id] = (time.monotonic(), result)
+        return result
+
+    def tab_gids(self) -> dict[str, str]:
+        if self._tab_cache and time.monotonic() - self._tab_cache[0] < 3600:
+            return self._tab_cache[1]
+        url = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
+        gids: dict[str, str] = {}
+        try:
+            page = self._request(url).decode("utf-8", errors="ignore")
+            pattern = re.compile(
+                r'\[21350203,"\[\d+,0,\\"(\d+)\\",\[\{\\"1\\":\[\[0,0,\\"([^\"]+)'
+            )
+            gids = {name.rstrip("\\"): gid for gid, name in pattern.findall(page)}
+        except Exception:
+            pass
+        self._tab_cache = (time.monotonic(), gids)
+        return gids
+
+    def tab_url(self, tab: str) -> str:
+        base = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
+        gid = self.tab_gids().get(tab)
+        return f"{base}?gid={gid}#gid={gid}" if gid else base
 
     def rows(self, tab: str) -> list[dict[str, str]]:
         cached = self._cache.get(tab)
@@ -85,7 +160,11 @@ class PublicSheet:
                 "nm": first_value(source, ("NM",), "0"),
                 "nmpz": first_value(source, ("NMPZ",), "0"),
                 "playoffs": first_value(source, ("Playoffs",)),
+                "profile_url": "",
             })
+        profiles = self.profile_urls()
+        for row in rows:
+            row["profile_url"] = profiles.get(normalized(row["player"]), "")
         return rows
 
     def player(self, query: str) -> dict[str, str] | None:
@@ -118,7 +197,12 @@ class PublicSheet:
                 "cutoff_gap": first_value(source, ("Cutoff Gap",)),
                 "streak": first_value(source, ("Top-16 Streak",)),
                 "weekly": [first_value(source, (f"Week {week}",)) for week in range(1, 11)],
+                "profile_url": "",
+                "avatar": "",
             })
+        profiles = self.profile_urls()
+        for row in rows:
+            row["profile_url"] = profiles.get(normalized(row["player"]), "")
         needle = normalized(query)
         exact = [row for row in rows if normalized(row["player"]) == needle]
         if exact:

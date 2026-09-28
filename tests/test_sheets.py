@@ -29,6 +29,7 @@ class SheetTests(unittest.TestCase):
 
     def test_player_stats_reads_weekly_form(self):
         sheet = PublicSheet()
+        sheet.profile_urls = lambda: {"trekk": "https://www.geoguessr.com/user/123"}
         sheet.rows = lambda tab: [
             {
                 "Player Stats Rank": "1",
@@ -41,6 +42,17 @@ class SheetTests(unittest.TestCase):
         row = sheet.player_stats("trekk")
         self.assertEqual(row["rank"], "1")
         self.assertEqual(row["weekly"][:2], ["1.300,0", "1.400,0"])
+        self.assertEqual(row["profile_url"], "https://www.geoguessr.com/user/123")
+
+    def test_tab_url_uses_discovered_gid(self):
+        sheet = PublicSheet()
+        sheet.tab_gids = lambda: {"Week 4": "911011305"}
+        self.assertEqual(
+            sheet.tab_url("Week 4"),
+            "https://docs.google.com/spreadsheets/d/"
+            + sheet.spreadsheet_id
+            + "/edit?gid=911011305#gid=911011305",
+        )
 
 
 if __name__ == "__main__":

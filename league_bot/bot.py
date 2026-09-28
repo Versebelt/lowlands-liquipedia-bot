@@ -6,7 +6,6 @@ import asyncio
 import logging
 import math
 import os
-
 import discord
 from aiohttp import web
 from discord import app_commands
@@ -21,7 +20,7 @@ YELLOW = 0xEFAC1F
 CHARCOAL = 0x111111
 COMMANDS = (
     ("/ping", "!ping", "Show the bot latency"),
-    ("/standings", "!standings", "Show the playoff top 16"),
+    ("/standings", "!standings", "Browse the complete standings"),
     ("/player name", "!player <name>", "Show a player's position and league points"),
     ("/week number", "!week <1-10>", "Show a week's seeds and deadline"),
     ("/stats name", "!stats <name>", "Show a detailed player card and weekly trend"),
@@ -75,6 +74,36 @@ def sparkline(values: list[str]) -> str:
     return "".join(blocks[round((value - low) / (high - low) * 7)] for value in parsed)
 
 
+def country_code(country: str) -> str:
+    key = str(country or "").strip().casefold()
+    return {
+        "nederland": "nl", "netherlands": "nl", "dutch": "nl", "nl": "nl",
+        "belgië": "be", "belgie": "be", "belgium": "be", "belgique": "be", "be": "be",
+        "luxemburg": "lu", "luxembourg": "lu", "lu": "lu",
+        "duitsland": "de", "germany": "de", "de": "de",
+        "frankrijk": "fr", "france": "fr", "fr": "fr",
+        "polen": "pl", "poland": "pl", "pl": "pl",
+        "united kingdom": "gb", "uk": "gb", "gb": "gb",
+    }.get(key, key if len(key) == 2 and key.isalpha() else "")
+
+
+def flag(country: str) -> str:
+    code = country_code(country).upper()
+    return "".join(chr(127397 + ord(letter)) for letter in code) if len(code) == 2 else "🌐"
+
+
+def linked_player(row: dict[str, object]) -> str:
+    name = str(row.get("player") or "Unknown")
+    url = str(row.get("profile_url") or "")
+    return f"[{name}]({url})" if url else name
+
+
+def enrich_profile(row: dict[str, object]) -> dict[str, object]:
+    profile = client.sheet.profile(str(row.get("player") or ""))
+    row.update({key: value for key, value in profile.items() if value})
+    return row
+
+
 class LowlandsClient(discord.Client):
     def __init__(self) -> None:
         intents = discord.Intents.none()
@@ -107,32 +136,73 @@ class LowlandsClient(discord.Client):
 client = LowlandsClient()
 
 
-def standings_embed(rows: list[dict[str, str]]) -> discord.Embed:
+def standings_embed(
+    rows: list[dict[str, str]], page: int = 0, page_size: int = 10, page_url: str = PUBLIC_URL
+) -> discord.Embed:
+    start = page * page_size
+    visible = rows[start : start + page_size]
     description = "\n".join(
-        f"`{row['rank']:>2}` **{row['player']}** — {display_number(row['points'])} pts"
-        for row in rows[:16]
+        f"`{row['rank']:>2}` {flag(row['country'])} **{linked_player(row)}** — {display_number(row['points'])} pts"
+        for row in visible
     )
     embed = discord.Embed(
         title="Lowlands League standings",
         description=description or "No standings available.",
         color=BLUE,
-        url=PUBLIC_URL,
+        url=page_url,
     )
-    embed.set_footer(text="Top 16 qualify for the playoffs")
+    pages = max(1, math.ceil(len(rows) / page_size))
+    embed.set_footer(text=f"Page {page + 1}/{pages} · Top 16 qualify for the playoffs")
     return embed
+
+
+class StandingsView(discord.ui.View):
+    def __init__(self, rows: list[dict[str, str]], page_url: str, page: int = 0) -> None:
+        super().__init__(timeout=300)
+        self.rows = rows
+        self.page = page
+        self.pages = max(1, math.ceil(len(rows) / 10))
+        self.page_url = page_url
+        self.update_buttons()
+
+    def update_buttons(self) -> None:
+        self.previous.disabled = self.page <= 0
+        self.next.disabled = self.page >= self.pages - 1
+
+    @discord.ui.button(label="Previous", emoji="◀️", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        self.page = max(0, self.page - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(
+            embed=standings_embed(self.rows, self.page, page_url=self.page_url), view=self
+        )
+
+    @discord.ui.button(label="Next", emoji="▶️", style=discord.ButtonStyle.primary)
+    async def next(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        self.page = min(self.pages - 1, self.page + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(
+            embed=standings_embed(self.rows, self.page, page_url=self.page_url), view=self
+        )
 
 
 def player_embed(row: dict[str, str]) -> discord.Embed:
-    embed = discord.Embed(title=row["player"], color=ORANGE, url=PUBLIC_URL)
+    embed = discord.Embed(
+        title=f"{flag(row['country'])} {row['player']}",
+        color=ORANGE,
+        url=row.get("profile_url") or PUBLIC_URL,
+    )
     embed.add_field(name="Position", value=f"#{row['rank']}")
     embed.add_field(name="League points", value=display_number(row["points"]))
     embed.add_field(name="Weeks played", value=row["weeks"] or "—")
-    if row["country"]:
-        embed.set_footer(text=row["country"])
+    embed.add_field(name="Country", value=f"{flag(row['country'])} {row['country'] or 'Unknown'}")
+    if row.get("avatar"):
+        embed.set_thumbnail(url=row["avatar"])
+    embed.set_footer(text="Click the player name to open their GeoGuessr profile")
     return embed
 
 
-def week_embed(number: int, rows: list[dict[str, str]]) -> discord.Embed:
+def week_embed(number: int, rows: list[dict[str, str]], page_url: str) -> discord.Embed:
     lines = []
     for row in rows:
         details = " — ".join(
@@ -144,7 +214,7 @@ def week_embed(number: int, rows: list[dict[str, str]]) -> discord.Embed:
         title=f"Week {number}",
         description="\n".join(lines),
         color=BLUE,
-        url=PUBLIC_URL,
+        url=page_url,
     )
     deadline = next((row["deadline"] for row in rows if row["deadline"]), "")
     if deadline:
@@ -238,13 +308,13 @@ def stats_embed(row: dict[str, object]) -> discord.Embed:
     weekly = [str(value) for value in row["weekly"]]
     played = [pretty_stat(value) for value in weekly if value]
     embed = discord.Embed(
-        title=f"#{row['rank']}  {row['player']}",
+        title=f"{flag(str(row['country']))}  #{row['rank']}  {row['player']}",
         description=(
             f"**Weekly form**  `{sparkline(weekly)}`\n"
             + (" · ".join(played) if played else "No weekly scores yet")
         ),
         color=ORANGE,
-        url=PUBLIC_URL,
+        url=str(row.get("profile_url") or PUBLIC_URL),
     )
     embed.add_field(name="League points", value=pretty_stat(str(row["points"])))
     embed.add_field(name="Average / week", value=pretty_stat(str(row["average"])))
@@ -255,13 +325,17 @@ def stats_embed(row: dict[str, object]) -> discord.Embed:
     embed.add_field(name="Cutoff gap", value=pretty_stat(str(row["cutoff_gap"])))
     embed.add_field(name="Top-16 streak", value=pretty_stat(str(row["streak"])))
     embed.add_field(name="Last three", value=pretty_stat(str(row["last_three"])), inline=False)
-    embed.set_footer(text=f"{row['country']} · {row['status']}")
+    if row.get("avatar"):
+        embed.set_thumbnail(url=str(row["avatar"]))
+    embed.set_footer(text=f"{row['country']} · {row['status']} · Click the title for the GeoGuessr profile")
     return embed
 
 
-def compare_embed(left: dict[str, object], right: dict[str, object]) -> discord.Embed:
+def compare_embed(left: dict[str, object], right: dict[str, object], page_url: str = PUBLIC_URL) -> discord.Embed:
     def card(row: dict[str, object]) -> str:
         return (
+            f"[Open GeoGuessr profile]({row['profile_url']})\n" if row.get("profile_url") else ""
+        ) + (
             f"Position: **#{row['rank']}**\n"
             f"Points: **{pretty_stat(str(row['points']))}**\n"
             f"Average: **{pretty_stat(str(row['average']))}**\n"
@@ -270,47 +344,47 @@ def compare_embed(left: dict[str, object], right: dict[str, object]) -> discord.
         )
 
     embed = discord.Embed(
-        title=f"{left['player']}  vs  {right['player']}",
+        title=f"{flag(str(left['country']))} {left['player']}  vs  {flag(str(right['country']))} {right['player']}",
         description="Head-to-head based on the latest public statistics.",
         color=YELLOW,
-        url=PUBLIC_URL,
+        url=page_url,
     )
     embed.add_field(name=str(left["player"]), value=card(left), inline=True)
     embed.add_field(name=str(right["player"]), value=card(right), inline=True)
     return embed
 
 
-def cutoff_embed(rows: list[dict[str, str]]) -> discord.Embed:
+def cutoff_embed(rows: list[dict[str, str]], page_url: str = PUBLIC_URL) -> discord.Embed:
     qualified = rows[15] if len(rows) >= 16 else None
     chasing = rows[16] if len(rows) >= 17 else None
     description = "The top 16 qualify. Seeds 9–16 enter Round 1, seeds 5–8 enter Round 2, and seeds 1–4 enter the quarterfinals."
-    embed = discord.Embed(title="Playoff cutoff", description=description, color=YELLOW, url=PUBLIC_URL)
+    embed = discord.Embed(title="Playoff cutoff", description=description, color=YELLOW, url=page_url)
     if qualified:
         embed.add_field(
             name="#16 · Currently qualified",
-            value=f"**{qualified['player']}**\n{display_number(qualified['points'])} pts",
+            value=f"{flag(qualified['country'])} **{linked_player(qualified)}**\n{display_number(qualified['points'])} pts",
         )
     if chasing:
         gap = max(0, int(stat_value(qualified["points"]) - stat_value(chasing["points"]))) if qualified else 0
         embed.add_field(
             name="#17 · First outside",
-            value=f"**{chasing['player']}**\n{display_number(chasing['points'])} pts\nGap: {gap} pts",
+            value=f"{flag(chasing['country'])} **{linked_player(chasing)}**\n{display_number(chasing['points'])} pts\nGap: {gap} pts",
         )
     return embed
 
 
-def mode_embed(mode: str, rows: list[dict[str, str]]) -> discord.Embed:
+def mode_embed(mode: str, rows: list[dict[str, str]], page_url: str = PUBLIC_URL) -> discord.Embed:
     key = mode.casefold()
     label = "Moving" if key == "moving" else key.upper()
     lines = [
-        f"`{index}` **{row['player']}** — {display_number(row[key])} pts"
+        f"`{index}` {flag(row['country'])} **{linked_player(row)}** — {display_number(row[key])} pts"
         for index, row in enumerate(rows[:5], start=1)
     ]
     return discord.Embed(
         title=f"{label} leaderboard",
         description="\n".join(lines) or "No mode scores available.",
         color=BLUE,
-        url=PUBLIC_URL,
+        url=page_url,
     )
 
 
@@ -327,8 +401,14 @@ async def handle_prefix_command(message: discord.Message) -> None:
             )
         elif command == "standings":
             async with message.channel.typing():
-                rows = await asyncio.to_thread(client.sheet.standings)
-            await message.reply(embed=standings_embed(rows), mention_author=False)
+                rows, page_url = await asyncio.gather(
+                    asyncio.to_thread(client.sheet.standings),
+                    asyncio.to_thread(client.sheet.tab_url, "Standings"),
+                )
+            await message.reply(
+                embed=standings_embed(rows, page_url=page_url),
+                view=StandingsView(rows, page_url), mention_author=False,
+            )
         elif command == "player":
             if not argument:
                 await message.reply("Usage: `!player <name>`", mention_author=False)
@@ -340,6 +420,7 @@ async def handle_prefix_command(message: discord.Message) -> None:
                     "No unique player match was found.", mention_author=False
                 )
                 return
+            row = await asyncio.to_thread(enrich_profile, row)
             await message.reply(embed=player_embed(row), mention_author=False)
         elif command == "week":
             if not argument.isdigit() or not 1 <= int(argument) <= 10:
@@ -354,7 +435,8 @@ async def handle_prefix_command(message: discord.Message) -> None:
                     mention_author=False,
                 )
                 return
-            await message.reply(embed=week_embed(number, rows), mention_author=False)
+            page_url = await asyncio.to_thread(client.sheet.tab_url, f"Week {number}")
+            await message.reply(embed=week_embed(number, rows, page_url), mention_author=False)
         elif command in {"commands", "help"}:
             await message.reply(embed=commands_embed(), mention_author=False)
         elif command == "stats":
@@ -365,6 +447,7 @@ async def handle_prefix_command(message: discord.Message) -> None:
             if not row:
                 await message.reply("No unique player match was found.", mention_author=False)
                 return
+            row = await asyncio.to_thread(enrich_profile, row)
             await message.reply(embed=stats_embed(row), mention_author=False)
         elif command == "compare":
             names = [name.strip() for name in argument.split("|", 1)]
@@ -383,10 +466,18 @@ async def handle_prefix_command(message: discord.Message) -> None:
                     mention_author=False,
                 )
                 return
-            await message.reply(embed=compare_embed(left, right), mention_author=False)
+            left, right = await asyncio.gather(
+                asyncio.to_thread(enrich_profile, left),
+                asyncio.to_thread(enrich_profile, right),
+            )
+            page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
+            await message.reply(embed=compare_embed(left, right, page_url), mention_author=False)
         elif command == "cutoff":
-            rows = await asyncio.to_thread(client.sheet.standings)
-            await message.reply(embed=cutoff_embed(rows), mention_author=False)
+            rows, page_url = await asyncio.gather(
+                asyncio.to_thread(client.sheet.standings),
+                asyncio.to_thread(client.sheet.tab_url, "Standings"),
+            )
+            await message.reply(embed=cutoff_embed(rows, page_url), mention_author=False)
         elif command == "mode":
             mode = argument.casefold()
             if mode not in {"moving", "nm", "nmpz"}:
@@ -395,7 +486,8 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 )
                 return
             rows = await asyncio.to_thread(client.sheet.mode_leaderboard, mode)
-            await message.reply(embed=mode_embed(mode, rows), mention_author=False)
+            page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
+            await message.reply(embed=mode_embed(mode, rows, page_url), mention_author=False)
         elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
@@ -469,8 +561,13 @@ async def ping(interaction: discord.Interaction) -> None:
 async def standings(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
     try:
-        rows = await asyncio.to_thread(client.sheet.standings)
-        await interaction.followup.send(embed=standings_embed(rows))
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.standings),
+            asyncio.to_thread(client.sheet.tab_url, "Standings"),
+        )
+        await interaction.followup.send(
+            embed=standings_embed(rows, page_url=page_url), view=StandingsView(rows, page_url)
+        )
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
@@ -484,6 +581,7 @@ async def player(interaction: discord.Interaction, name: str) -> None:
         if not row:
             await interaction.followup.send("No unique player match was found.", ephemeral=True)
             return
+        row = await asyncio.to_thread(enrich_profile, row)
         await interaction.followup.send(embed=player_embed(row))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
@@ -498,7 +596,8 @@ async def week(interaction: discord.Interaction, number: app_commands.Range[int,
         if not rows:
             await interaction.followup.send(f"No challenges are available for Week {number}.", ephemeral=True)
             return
-        await interaction.followup.send(embed=week_embed(number, rows))
+        page_url = await asyncio.to_thread(client.sheet.tab_url, f"Week {number}")
+        await interaction.followup.send(embed=week_embed(number, rows, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
@@ -517,6 +616,7 @@ async def stats(interaction: discord.Interaction, name: str) -> None:
         if not row:
             await interaction.followup.send("No unique player match was found.", ephemeral=True)
             return
+        row = await asyncio.to_thread(enrich_profile, row)
         await interaction.followup.send(embed=stats_embed(row))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
@@ -536,7 +636,12 @@ async def compare(interaction: discord.Interaction, player_one: str, player_two:
                 "One or both player names were not a unique match.", ephemeral=True
             )
             return
-        await interaction.followup.send(embed=compare_embed(left, right))
+        left, right = await asyncio.gather(
+            asyncio.to_thread(enrich_profile, left),
+            asyncio.to_thread(enrich_profile, right),
+        )
+        page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
+        await interaction.followup.send(embed=compare_embed(left, right, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
@@ -545,8 +650,11 @@ async def compare(interaction: discord.Interaction, player_one: str, player_two:
 async def cutoff(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
     try:
-        rows = await asyncio.to_thread(client.sheet.standings)
-        await interaction.followup.send(embed=cutoff_embed(rows))
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.standings),
+            asyncio.to_thread(client.sheet.tab_url, "Standings"),
+        )
+        await interaction.followup.send(embed=cutoff_embed(rows, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
@@ -563,8 +671,11 @@ async def cutoff(interaction: discord.Interaction) -> None:
 async def mode(interaction: discord.Interaction, mode: app_commands.Choice[str]) -> None:
     await interaction.response.defer()
     try:
-        rows = await asyncio.to_thread(client.sheet.mode_leaderboard, mode.value)
-        await interaction.followup.send(embed=mode_embed(mode.value, rows))
+        rows, page_url = await asyncio.gather(
+            asyncio.to_thread(client.sheet.mode_leaderboard, mode.value),
+            asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
+        )
+        await interaction.followup.send(embed=mode_embed(mode.value, rows, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
 
