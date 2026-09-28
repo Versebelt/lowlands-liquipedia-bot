@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 
 import discord
@@ -667,7 +668,10 @@ async def testreminder(interaction: discord.Interaction) -> None:
 
 
 async def health(_: web.Request) -> web.Response:
-    return web.json_response({"ok": client.is_ready(), "latency_ms": round(client.latency * 1000)})
+    latency = client.latency * 1000
+    return web.json_response(
+        {"ok": client.is_ready(), "latency_ms": round(latency) if math.isfinite(latency) else None}
+    )
 
 
 async def run() -> None:
