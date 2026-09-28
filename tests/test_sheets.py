@@ -18,6 +18,30 @@ class SheetTests(unittest.TestCase):
         self.assertEqual(sheet.player("Trekk")["rank"], "1")
         self.assertIsNone(sheet.player("Tre"))
 
+    def test_mode_leaderboard_sorts_descending(self):
+        sheet = PublicSheet()
+        sheet.standings = lambda: [
+            {"player": "A", "moving": "900", "nm": "1", "nmpz": "1"},
+            {"player": "B", "moving": "1200", "nm": "1", "nmpz": "1"},
+        ]
+        self.assertEqual(sheet.mode_leaderboard("Moving")[0]["player"], "B")
+        self.assertEqual(sheet.mode_leaderboard("invalid"), [])
+
+    def test_player_stats_reads_weekly_form(self):
+        sheet = PublicSheet()
+        sheet.rows = lambda tab: [
+            {
+                "Player Stats Rank": "1",
+                "Player": "Trekk",
+                "League Points": "4.000,0",
+                "Week 1": "1.300,0",
+                "Week 2": "1.400,0",
+            }
+        ]
+        row = sheet.player_stats("trekk")
+        self.assertEqual(row["rank"], "1")
+        self.assertEqual(row["weekly"][:2], ["1.300,0", "1.400,0"])
+
 
 if __name__ == "__main__":
     unittest.main()

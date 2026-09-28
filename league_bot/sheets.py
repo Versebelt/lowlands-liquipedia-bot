@@ -81,6 +81,10 @@ class PublicSheet:
                 "country": first_value(source, ("Country",)),
                 "points": first_value(source, ("League Points", "Points", "Total"), "0"),
                 "weeks": first_value(source, ("Weeks Played", "Weeks"), "0"),
+                "moving": first_value(source, ("Moving",), "0"),
+                "nm": first_value(source, ("NM",), "0"),
+                "nmpz": first_value(source, ("NMPZ",), "0"),
+                "playoffs": first_value(source, ("Playoffs",)),
             })
         return rows
 
@@ -91,6 +95,42 @@ class PublicSheet:
             return exact[0]
         partial = [row for row in self.standings() if needle in normalized(row["player"])]
         return partial[0] if len(partial) == 1 else None
+
+    def player_stats(self, query: str) -> dict[str, str] | None:
+        rows = []
+        for source in self.rows("Player Stats"):
+            player = first_value(source, ("Player", "Name"))
+            if not player:
+                continue
+            rows.append({
+                "rank": first_value(source, ("Player Stats Rank", "Rank")),
+                "player": player,
+                "country": first_value(source, ("Country",)),
+                "status": first_value(source, ("Status",)),
+                "points": first_value(source, ("League Points",)),
+                "weeks": first_value(source, ("Weeks",)),
+                "average": first_value(source, ("Average / Week",)),
+                "last_three": first_value(source, ("Last 3",)),
+                "consistency": first_value(source, ("Consistency",)),
+                "best_week": first_value(source, ("Best Week",)),
+                "worst_week": first_value(source, ("Worst Week",)),
+                "best_mode": first_value(source, ("Best Mode",)),
+                "cutoff_gap": first_value(source, ("Cutoff Gap",)),
+                "streak": first_value(source, ("Top-16 Streak",)),
+                "weekly": [first_value(source, (f"Week {week}",)) for week in range(1, 11)],
+            })
+        needle = normalized(query)
+        exact = [row for row in rows if normalized(row["player"]) == needle]
+        if exact:
+            return exact[0]
+        partial = [row for row in rows if needle in normalized(row["player"])]
+        return partial[0] if len(partial) == 1 else None
+
+    def mode_leaderboard(self, mode: str) -> list[dict[str, str]]:
+        key = normalized(mode)
+        if key not in {"moving", "nm", "nmpz"}:
+            return []
+        return sorted(self.standings(), key=lambda row: number(row[key]), reverse=True)
 
     def week(self, week: int) -> list[dict[str, str]]:
         result = []

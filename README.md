@@ -99,6 +99,14 @@ The same public commands also work with a message prefix: `!ping`,
 **Message Content Intent** to be enabled for the application in the Discord
 Developer Portal. Slash commands remain available when that intent is disabled.
 
+Additional visual commands are available in both forms:
+
+- `/stats name` or `!stats <name>` shows a detailed player card and form graph.
+- `/compare player_one player_two` or `!compare <name 1> | <name 2>` compares players.
+- `/cutoff` or `!cutoff` shows the live playoff qualification line.
+- `/mode mode` or `!mode <Moving|NM|NMPZ>` shows a mode-specific top five.
+- `/commands` or `!commands` shows the complete in-Discord command guide.
+
 The service reads only the public spreadsheet and caches results for two minutes.
 Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
 then start it with `docker compose up -d --build`. The container runs as a
