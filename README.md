@@ -1,9 +1,7 @@
-# Lowlands League Liquipedia publisher
+# Lowlands League automation
 
-Cloud publisher for Lowlands League Season 2. Google Apps Script generates the
-wikicode and starts a GitHub Actions workflow. The workflow publishes through
-Liquipedia's bot API with a descriptive user agent and a 15-second request
-interval.
+Automation for Lowlands League Season 2: Liquipedia publishing, scheduled
+Discord reminders, and the interactive Discord bot hosted on Render.
 
 ## Initial safety scope
 
@@ -93,8 +91,8 @@ Failed deliveries and delays over five minutes appear in the Admin spreadsheet's
 
 ## Permanent Discord bot
 
-The Docker service in `league_bot` keeps a Discord Gateway connection open and
-registers guild-scoped slash commands immediately:
+The Render service runs `python -m league_bot.bot`, keeps a Discord Gateway
+connection open, and registers guild-scoped slash commands immediately:
 
 - `/ping` checks connectivity and latency.
 - `/standings` shows the current playoff top 16.
@@ -152,13 +150,6 @@ the first time it creates or later edits this private configuration channel.
 GitHub reminder runs read this central configuration before every send and fall
 back to the existing repository secrets until `/setupreminders` has been run.
 
-Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
-then start it with `docker compose up -d --build`. The container runs as a
-non-root user, restarts automatically, and exposes its health endpoint only on
-localhost at `http://127.0.0.1:8080/health`.
-
-For an IPv6-only Google Compute Engine deployment, use `deploy/startup.sh` as
-the VM startup script. It installs the bot directly into a Python virtual
-environment so the process can use the host's IPv6 connection without Docker
-bridge configuration. Runtime secrets belong in `/opt/lowlands-bot/bot.env`
-with mode `0600`; they are never stored in VM metadata or Git.
+Render configuration lives in `render.yaml`. For local development, copy
+`.env.example` to `.env`, install `requirements.txt`, and run
+`python -m league_bot.bot`.
