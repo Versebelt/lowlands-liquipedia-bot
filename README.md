@@ -122,6 +122,19 @@ Additional visual commands are available in both forms:
 
 The service reads only the public spreadsheet and caches results for two minutes.
 
+### Keeping interactive commands online on Render Free
+
+`.github/workflows/keep-render-awake.yml` requests the public `/health` endpoint
+every five minutes. Render Free otherwise spins the web service down after fifteen
+minutes without inbound traffic, which disconnects the Discord Gateway and makes
+all slash and prefix commands unavailable. The workflow also validates the JSON
+health response and visibly fails in GitHub Actions if the service cannot recover.
+
+One continuously running Free service uses at most 744 instance hours in a
+31-day month, below Render's workspace allowance of 750 Free instance hours.
+Render can still restart Free services for maintenance; the bot reconnects
+automatically and the next healthcheck detects failures.
+
 ### Central Discord admin configuration
 
 Server administrators can manage reminders without editing GitHub secrets:
