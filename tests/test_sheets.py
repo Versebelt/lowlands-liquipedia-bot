@@ -65,6 +65,18 @@ class SheetTests(unittest.TestCase):
         profile = sheet.profile("Trekk")
         self.assertIn("pin/full-body.png", profile["avatar"])
         self.assertNotIn("pin/profile.png", profile["avatar"])
+        self.assertIn("resize:fill:512:512/gravity:no:0:80", profile["avatar"])
+
+    def test_season_insights_reads_five_k_record_from_visual_grid(self):
+        sheet = PublicSheet()
+        sheet._request = lambda url: (
+            ',,,,,Season records,,Player,\n'
+            ',,,,,Most 5Ks,,barle,26\n'
+        ).encode()
+        self.assertEqual(
+            sheet.season_insights()["most 5ks"],
+            {"player": "barle", "value": "26"},
+        )
 
 
 if __name__ == "__main__":

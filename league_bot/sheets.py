@@ -107,7 +107,7 @@ class PublicSheet:
             ).lstrip("/")
             if image:
                 result["avatar"] = (
-                    "https://www.geoguessr.com/images/resize:auto:256:256/gravity:ce/plain/" + image
+                    "https://www.geoguessr.com/images/resize:fill:512:512/gravity:no:0:80/plain/" + image
                 )
             result["country_code"] = str(data.get("countryCode") or "").lower()
         except Exception:
@@ -234,6 +234,23 @@ class PublicSheet:
         if key not in {"moving", "nm", "nmpz"}:
             return []
         return sorted(self.standings(), key=lambda row: number(row[key]), reverse=True)
+
+    def season_insights(self) -> dict[str, dict[str, str]]:
+        result: dict[str, dict[str, str]] = {}
+        query = urllib.parse.urlencode({"tqx": "out:csv", "sheet": "Insights"})
+        url = f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/gviz/tq?{query}"
+        text = self._request(url).decode("utf-8-sig")
+        for source in csv.reader(io.StringIO(text)):
+            values = [str(value or "").strip() for value in source]
+            for index, label in enumerate(values):
+                key = normalized(label)
+                if key in {"most 5ks", "moving specialist", "nm specialist", "nmpz specialist"}:
+                    following = [value for value in values[index + 1 :] if value]
+                    result[key] = {
+                        "player": following[0] if following else "",
+                        "value": following[1] if len(following) > 1 else "",
+                    }
+        return result
 
     def week(self, week: int) -> list[dict[str, str]]:
         result = []

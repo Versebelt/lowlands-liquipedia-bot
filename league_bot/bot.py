@@ -568,22 +568,28 @@ def prediction_embed(left: dict[str, object], right: dict[str, object], page_url
     return embed
 
 
-def achievements_embed(rows: list[dict[str, object]], page_url: str) -> discord.Embed:
+def achievements_embed(
+    rows: list[dict[str, object]],
+    standings: list[dict[str, str]],
+    insights: dict[str, dict[str, str]],
+    page_url: str,
+) -> discord.Embed:
     active = [row for row in rows if str(row.get("status") or "").casefold() != "disqualified"]
     embed = discord.Embed(title="Season achievement cards", color=ORANGE, url=page_url)
     if not active:
         embed.description = "No player statistics available."
         return embed
-    leader = max(active, key=lambda row: stat_value(str(row.get("points"))))
+    leader = standings[0] if standings else max(active, key=lambda row: stat_value(str(row.get("points"))))
     form = max(active, key=recent_score)
-    nmpz = max(active, key=lambda row: stat_value(str(row.get("nmpz"))))
+    nmpz = max(standings, key=lambda row: stat_value(str(row.get("nmpz")))) if standings else None
+    five = insights.get("most 5ks", {})
+    five_row = next((row for row in standings if str(row.get("player", "")).casefold() == str(five.get("player", "")).casefold()), None)
     embed.add_field(name="League leader", value=f"{flag(str(leader['country']))} **{linked_player(leader)}**\n{pretty_stat(str(leader['points']))} pts")
+    embed.add_field(name="5K machine", value=f"**{linked_player(five_row) if five_row else five.get('player')}**\n{pretty_stat(five.get('value', ''))} 5Ks" if five.get("player") else "Not available in Insights")
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Form player", value=f"{flag(str(form['country']))} **{linked_player(form)}**\n{display_number(str(recent_score(form)))} recent avg")
-    embed.add_field(name="NMPZ specialist", value=f"{flag(str(nmpz['country']))} **{linked_player(nmpz)}**\n{pretty_stat(str(nmpz.get('nmpz')))} pts")
-    five_rows = [row for row in active if stat_value(str(row.get("fives"))) > 0]
-    if five_rows:
-        five = max(five_rows, key=lambda row: stat_value(str(row.get("fives"))))
-        embed.add_field(name="5K machine", value=f"**{linked_player(five)}** · {pretty_stat(str(five['fives']))} 5Ks")
+    embed.add_field(name="NMPZ specialist", value=(f"{flag(str(nmpz['country']))} **{linked_player(nmpz)}**\n{pretty_stat(str(nmpz.get('nmpz')))} pts" if nmpz else "Not available"))
+    embed.set_footer(text="Live sources: Standings, Player Stats and Season Insights")
     return embed
 
 
@@ -783,9 +789,10 @@ async def handle_prefix_command(message: discord.Message) -> None:
             row = await asyncio.to_thread(enrich_profile, row)
             await message.reply(embed=stats_embed(row), mention_author=False)
         elif command in {"movers", "battle", "nations", "recap", "achievements", "milestones"}:
-            stats_rows, standings_rows, page_url = await asyncio.gather(
+            stats_rows, standings_rows, insights, page_url = await asyncio.gather(
                 asyncio.to_thread(client.sheet.all_player_stats),
                 asyncio.to_thread(client.sheet.standings),
+                asyncio.to_thread(client.sheet.season_insights),
                 asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
             )
             builders = {
@@ -793,7 +800,7 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 "battle": lambda: battle_embed(standings_rows, page_url),
                 "nations": lambda: nations_embed(standings_rows, page_url),
                 "recap": lambda: recap_embed(stats_rows, page_url),
-                "achievements": lambda: achievements_embed(stats_rows, page_url),
+                "achievements": lambda: achievements_embed(stats_rows, standings_rows, insights, page_url),
                 "milestones": lambda: milestones_embed(stats_rows, page_url),
             }
             await message.reply(embed=builders[command](), mention_author=False)
@@ -1091,9 +1098,10 @@ async def whoami(interaction: discord.Interaction) -> None:
 async def send_overview(interaction: discord.Interaction, kind: str) -> None:
     await interaction.response.defer()
     try:
-        stats_rows, standings_rows, page_url = await asyncio.gather(
+        stats_rows, standings_rows, insights, page_url = await asyncio.gather(
             asyncio.to_thread(client.sheet.all_player_stats),
             asyncio.to_thread(client.sheet.standings),
+            asyncio.to_thread(client.sheet.season_insights),
             asyncio.to_thread(client.sheet.tab_url, "Player Stats"),
         )
         builders = {
@@ -1101,7 +1109,7 @@ async def send_overview(interaction: discord.Interaction, kind: str) -> None:
             "battle": lambda: battle_embed(standings_rows, page_url),
             "nations": lambda: nations_embed(standings_rows, page_url),
             "recap": lambda: recap_embed(stats_rows, page_url),
-            "achievements": lambda: achievements_embed(stats_rows, page_url),
+            "achievements": lambda: achievements_embed(stats_rows, standings_rows, insights, page_url),
             "milestones": lambda: milestones_embed(stats_rows, page_url),
         }
         await interaction.followup.send(embed=builders[kind]())
