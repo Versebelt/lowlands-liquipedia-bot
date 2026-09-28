@@ -94,6 +94,11 @@ registers guild-scoped slash commands immediately:
 - `/player name` shows one player's rank, points, and weeks played.
 - `/week number` shows the seeds, modes, statuses, and deadline for a week.
 
+The same public commands also work with a message prefix: `!ping`,
+`!standings`, `!player <name>`, and `!week <1-10>`. Prefix commands require the
+**Message Content Intent** to be enabled for the application in the Discord
+Developer Portal. Slash commands remain available when that intent is disabled.
+
 The service reads only the public spreadsheet and caches results for two minutes.
 Copy `.env.example` to `.env`, set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`,
 then start it with `docker compose up -d --build`. The container runs as a
