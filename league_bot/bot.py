@@ -21,28 +21,50 @@ ORANGE = 0xE75325
 YELLOW = 0xEFAC1F
 CHARCOAL = 0x111111
 LINK_PREFIX = "LLBOT_LINK_V1:"
-COMMANDS = (
-    ("/ping", "!ping", "Show the bot latency"),
-    ("/standings", "!standings", "Browse the complete standings"),
-    ("/player name", "!player <name>", "Show a player's position and league points"),
-    ("/week number", "!week <1-10>", "Show a week's seeds and deadline"),
-    ("/stats name", "!stats <name>", "Show a detailed player card and weekly trend"),
-    ("/compare player_one player_two", "!compare <name 1> | <name 2>", "Compare two players head-to-head"),
-    ("/cutoff", "!cutoff", "Show the current playoff qualification line"),
-    ("/mode mode", "!mode <Moving|NM|NMPZ>", "Show a mode-specific top five"),
-    ("/form", "!form", "Show the hottest recent form"),
-    ("/country country", "!country <NL|BE|LU>", "Show one country's leaderboard"),
-    ("/randommatch", "!randommatch", "Generate a random league matchup"),
-    ("/whoami", "!whoami", "Open your personal league dashboard"),
-    ("/linkplayer name", "!linkplayer <name>", "Link your Discord account to a player"),
-    ("/movers", "!movers", "Show this week's biggest rises and falls"),
-    ("/battle", "!battle", "Show the closest playoff-cutoff battle"),
-    ("/nations", "!nations", "Compare Netherlands, Belgium and Luxembourg"),
-    ("/recap", "!recap", "Generate the latest weekly recap"),
-    ("/predict player_one player_two", "!predict <name 1> | <name 2>", "Predict a matchup from league form"),
-    ("/achievements", "!achievements", "Show current season achievement cards"),
-    ("/milestones", "!milestones", "Show records and notable milestones"),
-    ("/commands", "!commands", "Show this command overview"),
+COMMAND_PAGES = (
+    (
+        ("Getting started", (
+            ("/commands", "!commands", "Open this overview"),
+            ("/ping", "!ping", "Check bot status and latency"),
+        )),
+        ("Your profile", (
+            ("/linkplayer name", "!linkplayer <name>", "Link Discord to your league player"),
+            ("/whoami", "!whoami", "Open your personal dashboard"),
+            ("/player name", "!player <name>", "Quick player overview"),
+            ("/stats name", "!stats <name>", "Detailed player card and form"),
+            ("/compare player_one player_two", "!compare <name 1> | <name 2>", "Compare two players"),
+        )),
+        ("League essentials", (
+            ("/standings", "!standings", "Browse the complete standings"),
+            ("/week number", "!week <1-10>", "Seeds, status and deadline"),
+            ("/cutoff", "!cutoff", "Current playoff qualification line"),
+            ("/mode mode", "!mode <Moving|NM|NMPZ>", "Mode-specific top five"),
+            ("/country country", "!country <NL|BE|LU>", "Country leaderboard"),
+        )),
+    ),
+    (
+        ("Stories & statistics", (
+            ("/form", "!form", "Strongest recent form"),
+            ("/movers", "!movers", "Weekly rises and falls"),
+            ("/battle", "!battle", "Closest playoff-cutoff battle"),
+            ("/nations", "!nations", "Benelux Nations Cup"),
+            ("/recap", "!recap", "Latest weekly recap"),
+            ("/achievements", "!achievements", "Live season awards"),
+            ("/milestones", "!milestones", "Records and milestones"),
+        )),
+        ("Matchups", (
+            ("/predict player_one player_two", "!predict <name 1> | <name 2>", "Form-based prediction"),
+            ("/randommatch", "!randommatch", "Generate a random matchup"),
+        )),
+        ("Administrator", (
+            ("/adminconfig", "!adminconfig", "Show reminder configuration"),
+            ("/setupreminders #channel @role", "!setupreminders #channel @role", "Configure channel and role"),
+            ("/setannouncement #channel", "!setannouncement #channel", "Change announcement channel"),
+            ("/setreminderrole @role", "!setreminderrole @role", "Change reminder role"),
+            ("/reminders enabled", "!reminders <on|off>", "Pause or resume reminders"),
+            ("/testreminder", "!testreminder", "Send a mention-free test"),
+        )),
+    ),
 )
 ADMIN_COMMANDS = (
     ("/adminconfig", "!adminconfig", "Show the active reminder configuration"),
@@ -246,16 +268,48 @@ def week_embed(number: int, rows: list[dict[str, str]], page_url: str) -> discor
     return embed
 
 
-def commands_embed() -> discord.Embed:
-    lines = [f"`{slash}` · `{prefix}`\n{description}" for slash, prefix, description in COMMANDS]
+def commands_embed(page: int = 0) -> discord.Embed:
+    page = max(0, min(page, len(COMMAND_PAGES) - 1))
     embed = discord.Embed(
-        title="Lowlands League commands",
-        description="\n\n".join(lines),
+        title=f"Lowlands League commands · {page + 1}/{len(COMMAND_PAGES)}",
+        description="Every command works with both `/` and `!`.",
         color=BLUE,
         url=PUBLIC_URL,
     )
-    embed.set_footer(text="Slash and ! commands use the same live sheet data")
+    for title, commands in COMMAND_PAGES[page]:
+        embed.add_field(
+            name=title,
+            value="\n".join(
+                f"`{slash}` · `{prefix}` — {description}"
+                for slash, prefix, description in commands
+            ),
+            inline=False,
+        )
+    embed.set_footer(text=f"Page {page + 1}/{len(COMMAND_PAGES)} · Live data from the public league sheet")
     return embed
+
+
+class CommandsView(discord.ui.View):
+    def __init__(self, page: int = 0) -> None:
+        super().__init__(timeout=300)
+        self.page = page
+        self.update_buttons()
+
+    def update_buttons(self) -> None:
+        self.previous.disabled = self.page == 0
+        self.next.disabled = self.page == len(COMMAND_PAGES) - 1
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        self.page = max(0, self.page - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=commands_embed(self.page), view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+    async def next(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        self.page = min(len(COMMAND_PAGES) - 1, self.page + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=commands_embed(self.page), view=self)
 
 
 def admin_config_embed(config: AdminConfig) -> discord.Embed:
@@ -694,7 +748,7 @@ async def handle_prefix_command(message: discord.Message) -> None:
             page_url = await asyncio.to_thread(client.sheet.tab_url, f"Week {number}")
             await message.reply(embed=week_embed(number, rows, page_url), mention_author=False)
         elif command in {"commands", "help"}:
-            await message.reply(embed=commands_embed(), mention_author=False)
+            await message.reply(embed=commands_embed(), view=CommandsView(), mention_author=False)
         elif command == "stats":
             if not argument:
                 await message.reply("Usage: `!stats <name>`", mention_author=False)
@@ -934,7 +988,7 @@ async def week(interaction: discord.Interaction, number: app_commands.Range[int,
 
 @client.tree.command(name="commands", description="Show all Lowlands League bot commands")
 async def command_list(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message(embed=commands_embed(), ephemeral=True)
+    await interaction.response.send_message(embed=commands_embed(), view=CommandsView(), ephemeral=True)
 
 
 @client.tree.command(name="stats", description="Show a detailed Lowlands League player card")
