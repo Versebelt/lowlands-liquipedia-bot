@@ -59,7 +59,9 @@ revision id, failed step, or error message.
 ## Discord seed reminders
 
 Apps Script determines the current week and dispatches
-`.github/workflows/discord-reminders.yml` at these times:
+`.github/workflows/discord-reminders.yml` at these times. A five-minute scheduler
+checks the Europe/Amsterdam clock instead of relying on Apps Script's approximate
+`nearMinute()` scheduling:
 
 - Monday 09:00 Europe/Amsterdam: the new week is open.
 - Friday 20:00: reminder mentioning the generic league role.
@@ -82,7 +84,11 @@ Enable the bot's **Server Members Intent**, then invite it with permission to
 view and send messages in the announcement channel. Discord's
 `allowed_mentions` is restricted to the exact resolved users or configured
 role; arbitrary mentions and `@everyone` are never enabled. Apps Script records
-dispatches and their eventual GitHub result in the `Discord Log` tab.
+dispatches and their eventual GitHub result in the `Discord Log` tab. Scheduled
+entries also record the intended time, dispatch delay, and workflow completion
+time. A per-week delivery key prevents duplicates when triggers overlap or retry.
+Failed deliveries and delays over five minutes appear in the Admin spreadsheet's
+`Checks` tab.
 
 ## Permanent Discord bot
 
