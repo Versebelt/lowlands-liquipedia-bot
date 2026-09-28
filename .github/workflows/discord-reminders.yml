@@ -8,7 +8,7 @@ on:
         description: Reminder to send
         required: true
         type: choice
-        options: [open, friday, sunday]
+        options: [test, open, friday, sunday]
       week:
         description: Lowlands League week number
         required: true

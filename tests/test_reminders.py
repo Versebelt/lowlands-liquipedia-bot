@@ -4,6 +4,15 @@ from reminders.send import Config, ReminderError, build_payload, parse_players, 
 
 
 class ReminderTests(unittest.TestCase):
+    def test_test_payload_never_mentions_users_or_roles(self):
+        payload = build_payload("test", 4, self.config(), [])
+
+        self.assertIn("reminder system test", payload["content"])
+        self.assertEqual(
+            payload["allowed_mentions"],
+            {"parse": [], "roles": [], "users": [], "replied_user": False},
+        )
+
     def config(self) -> Config:
         return Config("token", "100", "200", "300", "https://example.com/sheet")
 

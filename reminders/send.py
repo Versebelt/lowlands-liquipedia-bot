@@ -171,7 +171,14 @@ def build_payload(
     config: Config,
     resolved_players: list[dict[str, object]],
 ) -> dict[str, object]:
-    if kind == "open":
+    if kind == "test":
+        content = (
+            "**Lowlands League reminder system test**\n"
+            "The Discord bot can successfully post announcements. "
+            "No players or roles were mentioned in this test."
+        )
+        allowed_mentions = {"parse": [], "roles": [], "users": []}
+    elif kind == "open":
         content = (
             f"<@&{config.generic_role_id}>\n\n"
             f"**Week {week} is now open!**\n"
@@ -231,7 +238,9 @@ def parse_players(value: str) -> list[dict[str, object]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=("open", "friday", "sunday"), required=True)
+    parser.add_argument(
+        "--kind", choices=("test", "open", "friday", "sunday"), required=True
+    )
     parser.add_argument("--week", type=int, required=True)
     parser.add_argument("--players-json", default="[]")
     parser.add_argument("--dry-run", action="store_true")
