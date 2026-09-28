@@ -107,7 +107,7 @@ class PublicSheet:
             ).lstrip("/")
             if image:
                 result["avatar"] = (
-                    "https://www.geoguessr.com/images/resize:fill:512:512/gravity:no:0:80/plain/" + image
+                    "https://www.geoguessr.com/images/resize:fill:512:512/gravity:no:0:0/plain/" + image
                 )
             result["country_code"] = str(data.get("countryCode") or "").lower()
         except Exception:
