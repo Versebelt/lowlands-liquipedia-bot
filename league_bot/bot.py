@@ -9,7 +9,7 @@ import math
 import os
 import secrets
 import discord
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from discord import app_commands
 
 from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
@@ -166,9 +166,36 @@ class LowlandsClient(discord.Client):
         guild = discord.Object(id=self.guild_id)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
+        self.loop.create_task(self.keep_render_awake())
+
+    async def keep_render_awake(self) -> None:
+        """Prevent a Render Free web service from sleeping between Discord events."""
+        service_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+        if not service_url:
+            logging.info("Render self-keepalive disabled outside Render")
+            return
+
+        timeout = ClientTimeout(total=30)
+        await asyncio.sleep(60)
+        async with ClientSession(timeout=timeout) as session:
+            while not self.is_closed():
+                try:
+                    async with session.get(f"{service_url}/health") as response:
+                        await response.read()
+                        logging.info("Render self-keepalive returned HTTP %s", response.status)
+                except (TimeoutError, OSError) as exc:
+                    logging.warning("Render self-keepalive failed: %s", exc)
+                await asyncio.sleep(10 * 60)
 
     async def on_ready(self) -> None:
         logging.info("Connected as %s (%s)", self.user, self.user.id if self.user else "unknown")
+        await self.change_presence(activity=discord.Game(name="Lowlands League Season 2"))
+
+    async def on_disconnect(self) -> None:
+        logging.warning("Discord gateway disconnected; waiting for automatic reconnect")
+
+    async def on_resumed(self) -> None:
+        logging.info("Discord gateway session resumed")
         await self.change_presence(activity=discord.Game(name="Lowlands League Season 2"))
 
     async def on_message(self, message: discord.Message) -> None:
