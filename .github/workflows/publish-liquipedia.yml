@@ -20,6 +20,11 @@ on:
         description: Correlation id used by the Google Sheet log
         required: true
         type: string
+      allow_unmarked_existing:
+        description: One-time adoption of an existing production page
+        required: false
+        default: "false"
+        type: string
 
 permissions:
   contents: read
@@ -50,10 +55,11 @@ jobs:
           LIQUIPEDIA_BOT_USERNAME: ${{ secrets.LIQUIPEDIA_BOT_USERNAME }}
           LIQUIPEDIA_BOT_PASSWORD: ${{ secrets.LIQUIPEDIA_BOT_PASSWORD }}
           LIQUIPEDIA_CONTACT: ${{ secrets.LIQUIPEDIA_CONTACT }}
-          LIQUIPEDIA_ALLOWED_TITLES: User:DialloBOT/test
+          LIQUIPEDIA_ALLOWED_TITLES: User:DialloBOT/test|Lowlands League/Season 2|Lowlands League/Season 2/Week 1|Lowlands League/Season 2/Week 2|Lowlands League/Season 2/Week 3|Lowlands League/Season 2/Week 4|Lowlands League/Season 2/Week 5|Lowlands League/Season 2/Week 6|Lowlands League/Season 2/Week 7|Lowlands League/Season 2/Week 8|Lowlands League/Season 2/Week 9|Lowlands League/Season 2/Week 10
           INPUT_PAGE_TITLE: ${{ inputs.page_title }}
           INPUT_CONTENT_B64: ${{ inputs.content_b64 }}
           INPUT_EDIT_SUMMARY: ${{ inputs.edit_summary }}
+          INPUT_ALLOW_UNMARKED_EXISTING: ${{ inputs.allow_unmarked_existing }}
         run: python publisher/publish.py
 
       - name: Upload publication result

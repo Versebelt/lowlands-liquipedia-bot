@@ -3,15 +3,21 @@
 Automation for Lowlands League Season 2: Liquipedia publishing, scheduled
 Discord reminders, and the interactive Discord bot hosted on Render.
 
-## Initial safety scope
+## Liquipedia publishing scope
 
-The workflow initially accepts exactly one page:
+The publisher accepts only these exact pages:
 
 ```text
 User:DialloBOT/test
+Lowlands League/Season 2
+Lowlands League/Season 2/Week 1 through Week 10
 ```
 
-Production tournament pages must only be added after the test page succeeds.
+Every generated page carries a managed-page marker. Existing production pages
+can be adopted once through the explicitly confirmed spreadsheet menu action.
+After adoption, publication stops if that marker is removed, preventing an
+unexpected full-page overwrite. Identical content produces `NoChange` instead
+of a new revision.
 
 ## Repository secrets
 
@@ -48,6 +54,18 @@ or source code.
 4. Choose **Lowlands League → Queue overview test via GitHub**.
 5. Open the repository's **Actions** tab and inspect the run.
 6. Verify the result at `https://liquipedia.net/geoguessr/User:DialloBOT/test`.
+
+## Production activation
+
+1. Reload the Admin spreadsheet so the updated menu is visible.
+2. Choose **Lowlands League → Adopt & publish production pages (first run)**.
+3. Type `ADOPT` and inspect every result in **Liquipedia Log**.
+4. Once all pages are marked and correct, choose
+   **Install daily production sync (22:00)**.
+
+The daily run publishes the overview plus configured weeks up to the current
+week. Future weeks are not created early. The test-page scheduler is removed
+when the production scheduler is installed.
 
 The workflow does not retry HTTP 429 responses and does not publish unchanged
 content. Every run uploads a short-lived result artifact. Apps Script correlates

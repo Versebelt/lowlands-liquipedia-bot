@@ -16,6 +16,7 @@ import requests
 
 API_URL = "https://liquipedia.net/geoguessr/api.php"
 MANAGED_TEST_MARKER = "<!-- LOWLANDS_LEAGUE_MANAGED_TEST_PAGE -->"
+MANAGED_PRODUCTION_MARKER = "<!-- LOWLANDS_LEAGUE_MANAGED_PAGE -->"
 MIN_REQUEST_INTERVAL_SECONDS = 15.0
 MAX_WIKICODE_BYTES = 200_000
 RESULT_PATH = Path(os.environ.get("LIQUIPEDIA_RESULT_PATH", "publish-result.json"))
@@ -34,6 +35,7 @@ class Config:
     wikicode: str
     edit_summary: str
     allowed_titles: frozenset[str]
+    allow_unmarked_existing: bool
 
 
 def required_env(name: str) -> str:
@@ -67,10 +69,22 @@ def load_config() -> Config:
         raise PublishError(
             f"Safety stop: {page_title!r} is not in LIQUIPEDIA_ALLOWED_TITLES."
         )
-    if page_title == "User:DialloBOT/test" and not wikicode.startswith(
+    expected_marker = (
         MANAGED_TEST_MARKER
-    ):
-        raise PublishError("The managed test-page marker is missing from the wikicode.")
+        if page_title == "User:DialloBOT/test"
+        else MANAGED_PRODUCTION_MARKER
+    )
+    if not wikicode.startswith(expected_marker):
+        raise PublishError(
+            f"The managed-page marker is missing for {page_title!r}."
+        )
+
+    allow_unmarked_existing = (
+        os.environ.get("INPUT_ALLOW_UNMARKED_EXISTING", "false").strip().lower()
+        == "true"
+    )
+    if page_title == "User:DialloBOT/test" and allow_unmarked_existing:
+        raise PublishError("The test page cannot use production adoption mode.")
 
     return Config(
         username=required_env("LIQUIPEDIA_BOT_USERNAME"),
@@ -80,6 +94,7 @@ def load_config() -> Config:
         wikicode=wikicode,
         edit_summary=required_env("INPUT_EDIT_SUMMARY"),
         allowed_titles=allowed,
+        allow_unmarked_existing=allow_unmarked_existing,
     )
 
 
@@ -234,13 +249,14 @@ class LiquipediaClient:
                 revision.get("slots", {}).get("main", {}).get("content", "")
             )
 
-        if (
-            exists
-            and self.config.page_title == "User:DialloBOT/test"
-            and MANAGED_TEST_MARKER not in current_text
-        ):
+        expected_marker = (
+            MANAGED_TEST_MARKER
+            if self.config.page_title == "User:DialloBOT/test"
+            else MANAGED_PRODUCTION_MARKER
+        )
+        if exists and expected_marker not in current_text and not self.config.allow_unmarked_existing:
             raise PublishError(
-                "Safety stop: the existing test page was not created by this publisher."
+                "Safety stop: the existing page is not marked as managed by this publisher."
             )
         if current_text == self.config.wikicode:
             return {"result": "NoChange", "oldrevid": revision.get("revid")}
