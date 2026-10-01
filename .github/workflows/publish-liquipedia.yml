@@ -38,7 +38,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -58,7 +58,7 @@ jobs:
         run: |
           delay=0
           if [[ "$INPUT_PAGE_TITLE" =~ /Week\ ([0-9]+)$ ]]; then
-            delay=$((BASH_REMATCH[1] * 25))
+            delay=$((BASH_REMATCH[1] * 90))
           fi
           echo "Waiting ${delay}s before publishing ${INPUT_PAGE_TITLE}"
           sleep "$delay"
