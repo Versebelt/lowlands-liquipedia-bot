@@ -8,9 +8,12 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("Tournament Control")
     .addItem("Set up / repair Admin sheet", "setupTournamentSystem")
-    .addItem("Set up / repair Public bracket", "setupTournamentPublicSpreadsheet")
     .addSeparator()
-    .addItem("Generate 8-player practice bracket", "generatePracticeTournament")
+    .addItem("Create new tournament", "createTournament")
+    .addItem("Switch active tournament", "switchActiveTournament")
+    .addItem("Archive active tournament", "archiveActiveTournament")
+    .addSeparator()
+    .addItem("Generate bracket", "generateTournamentBracket")
     .addItem("Sync Public bracket", "syncTournamentPublicSpreadsheet")
     .addSeparator()
     .addItem("Set Discord API secret", "setTournamentApiSecret")
@@ -25,6 +28,7 @@ function onOpen() {
 const TOURNAMENT = {
   SHEETS: {
     CONFIG: "Tournament",
+    TOURNAMENTS: "Tournaments",
     PLAYERS: "Tournament Players",
     MATCHES: "Tournament Matches",
     GAMES: "Tournament Games",
@@ -32,28 +36,34 @@ const TOURNAMENT = {
   },
   HEADERS: {
     CONFIG: ["Setting", "Value", "Notes"],
+    TOURNAMENTS: [
+      "Tournament ID", "Tournament Name", "Type", "Status", "Maximum Players", "Bracket Size",
+      "Default Best Of", "Preset 1", "Preset 2", "Preset 3", "Public Spreadsheet ID",
+      "Public Bracket URL", "Stream URL", "Created At", "Archived At",
+    ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
-      "Status", "Checked In", "Registered At", "Checked In At", "Updated At", "Notes",
+      "Status", "Checked In", "Registered At", "Checked In At", "Updated At", "Notes", "Tournament ID",
     ],
     MATCHES: [
       "Match ID", "Round", "Bracket Order", "Player 1", "Player 2",
       "Best Of", "Preset 1", "Preset 2", "Preset 3", "Highlighted",
       "Player 1 Ready", "Player 2 Ready", "Admin Released", "Status",
       "Party URL", "Series Score", "Winner", "Next Match ID", "Next Slot",
-      "Scheduled At", "Stream URL", "Discord Message ID", "Updated At",
+      "Scheduled At", "Stream URL", "Discord Message ID", "Updated At", "Tournament ID",
     ],
     GAMES: [
       "Submitted At", "Match ID", "Game", "Mode", "Result URL", "Submitted By",
-      "Player 1 Score", "Player 2 Score", "Winner", "Status", "Notes",
+      "Player 1 Score", "Player 2 Score", "Winner", "Status", "Notes", "Tournament ID",
     ],
-    LOG: ["Timestamp", "Actor", "Action", "Match ID", "Details"],
+    LOG: ["Timestamp", "Actor", "Action", "Match ID", "Details", "Tournament ID"],
   },
 };
 
 function setupTournamentSystem() {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), s = TOURNAMENT.SHEETS;
   tournamentInitSheet_(ss, s.CONFIG, TOURNAMENT.HEADERS.CONFIG);
+  tournamentInitSheet_(ss, s.TOURNAMENTS, TOURNAMENT.HEADERS.TOURNAMENTS);
   tournamentInitSheet_(ss, s.PLAYERS, TOURNAMENT.HEADERS.PLAYERS);
   tournamentInitSheet_(ss, s.MATCHES, TOURNAMENT.HEADERS.MATCHES);
   tournamentInitSheet_(ss, s.GAMES, TOURNAMENT.HEADERS.GAMES);
@@ -61,7 +71,8 @@ function setupTournamentSystem() {
 
   const config = ss.getSheetByName(s.CONFIG);
   if (config.getLastRow() < 2) {
-    config.getRange(2, 1, 13, 3).setValues([
+    config.getRange(2, 1, 14, 3).setValues([
+      ["Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on"],
       ["Tournament Name", "GeoNederland Practice Tournament", "Shown in Discord"],
       ["Tournament Status", "Setup", "Setup / Check-in / Live / Complete"],
       ["Registration Status", "Open", "Open / Closed"],
@@ -85,28 +96,90 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Registration Status", "Open", "Open / Closed");
   tournamentEnsureConfig_("Registration Deadline", "", "Optional deadline shown in Discord");
   tournamentEnsureConfig_("Maximum Players", 32, "New registrations stop at this number");
+  tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
+  tournamentEnsureInitialTournament_();
+  tournamentMigrateLegacyTournamentIds_();
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
 }
 
 function setupTournamentPublicSpreadsheet() {
   setupTournamentSystem();
-  const config = tournamentConfig_(), id = tournamentSpreadsheetId_(config["Public Spreadsheet ID"]);
-  if (!id) throw Error("Enter the separate Public Spreadsheet ID on the Tournament tab first.");
+  const tournament = tournamentActive_(), id = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
+  if (!id) throw Error("The active tournament does not have a Public Spreadsheet ID.");
   if (id === SpreadsheetApp.getActiveSpreadsheet().getId()) throw Error("Admin and Public must be separate spreadsheets.");
   const publicSs = SpreadsheetApp.openById(id), bracket = publicSs.getSheetByName("Bracket") || publicSs.insertSheet("Bracket"), schedule = publicSs.getSheetByName("Schedule") || publicSs.insertSheet("Schedule");
   bracket.setHiddenGridlines(true); schedule.setHiddenGridlines(true);
-  tournamentSetConfig_("Public Bracket URL", "https://docs.google.com/spreadsheets/d/" + id + "/edit");
+  tournamentUpdateActive_({"Public Bracket URL": "https://docs.google.com/spreadsheets/d/" + id + "/edit"});
   syncTournamentPublicSpreadsheet();
   SpreadsheetApp.getActiveSpreadsheet().toast("Public bracket ready.", "GeoNederland Tournament", 6);
 }
 
 function syncTournamentPublicSpreadsheet() {
-  const config = tournamentConfig_(), id = tournamentSpreadsheetId_(config["Public Spreadsheet ID"]);
-  if (!id) throw Error("Public Spreadsheet ID is empty on the Tournament tab.");
+  const config = tournamentConfig_(), tournament = tournamentActive_(), id = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
+  if (!id) throw Error("The active tournament does not have a Public Spreadsheet ID.");
   const publicSs = SpreadsheetApp.openById(id), bracket = publicSs.getSheetByName("Bracket") || publicSs.insertSheet("Bracket"), schedule = publicSs.getSheetByName("Schedule") || publicSs.insertSheet("Schedule"), matches = tournamentPublicMatches_();
-  tournamentRenderPublicBracket_(bracket, config, matches);
-  tournamentRenderPublicSchedule_(schedule, config, matches);
+  const view = Object.assign({}, config, tournament);
+  tournamentRenderPublicBracket_(bracket, view, matches);
+  tournamentRenderPublicSchedule_(schedule, view, matches);
   SpreadsheetApp.flush();
+}
+
+function createTournament() {
+  setupTournamentSystem();
+  const ui = SpreadsheetApp.getUi();
+  const namePrompt = ui.prompt("Create tournament", "Tournament name, for example NK 2027 Open Qualifier 1", ui.ButtonSet.OK_CANCEL);
+  if (namePrompt.getSelectedButton() !== ui.Button.OK) return;
+  const name = String(namePrompt.getResponseText() || "").trim();
+  if (name.length < 3) throw Error("Enter a tournament name of at least 3 characters.");
+  const idPrompt = ui.prompt("Tournament ID", "Short unique ID, for example nk27-oq1", ui.ButtonSet.OK_CANCEL);
+  if (idPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const id = String(idPrompt.getResponseText() || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+  if (!id) throw Error("Enter a valid Tournament ID.");
+  if (tournamentById_(id)) throw Error("Tournament ID already exists: " + id);
+  const maxPrompt = ui.prompt("Maximum players", "Choose 8, 16, 32 or 64.", ui.ButtonSet.OK_CANCEL);
+  if (maxPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const maximum = Number(maxPrompt.getResponseText());
+  if (![8, 16, 32, 64].includes(maximum)) throw Error("Maximum players must be 8, 16, 32 or 64.");
+  const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
+  const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
+  const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
+    publicSs.getId(), publicSs.getUrl(), "", new Date(), ""];
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS).appendRow(row);
+  tournamentSetConfig_("Active Tournament ID", id);
+  tournamentSetConfig_("Tournament Name", name);
+  tournamentSetConfig_("Tournament Status", "Registration");
+  tournamentSetConfig_("Registration Status", "Open");
+  tournamentSetConfig_("Maximum Players", maximum);
+  syncTournamentPublicSpreadsheet();
+  tournamentLog_("sheet", "create_tournament", "", name + " · " + publicSs.getUrl());
+  ui.alert("Tournament created", name + " is now active.\n\nPublic bracket:\n" + publicSs.getUrl(), ui.ButtonSet.OK);
+}
+
+function switchActiveTournament() {
+  setupTournamentSystem();
+  const ui = SpreadsheetApp.getUi(), tournaments = tournamentRows_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS));
+  const list = tournaments.map((row) => row["Tournament ID"] + " — " + row["Tournament Name"] + " (" + row.Status + ")").join("\n");
+  const prompt = ui.prompt("Switch active tournament", list + "\n\nEnter Tournament ID:", ui.ButtonSet.OK_CANCEL);
+  if (prompt.getSelectedButton() !== ui.Button.OK) return;
+  const id = String(prompt.getResponseText() || "").trim();
+  const tournament = tournamentById_(id);
+  if (!tournament) throw Error("Unknown Tournament ID: " + id);
+  tournamentSetConfig_("Active Tournament ID", id);
+  tournamentSetConfig_("Tournament Name", tournament["Tournament Name"]);
+  tournamentSetConfig_("Tournament Status", tournament.Status);
+  tournamentSetConfig_("Maximum Players", tournament["Maximum Players"]);
+  SpreadsheetApp.getActiveSpreadsheet().toast(tournament["Tournament Name"] + " is now active.", "GeoNederland Tournament", 6);
+}
+
+function archiveActiveTournament() {
+  const tournament = tournamentActive_(), ui = SpreadsheetApp.getUi();
+  const answer = ui.alert("Archive tournament?", "Archive " + tournament["Tournament Name"] + "? All rows and public output remain available.", ui.ButtonSet.YES_NO);
+  if (answer !== ui.Button.YES) return;
+  tournamentUpdateActive_({Status: "Archived", "Archived At": new Date()});
+  tournamentSetConfig_("Tournament Status", "Archived");
+  tournamentSetConfig_("Registration Status", "Closed");
+  syncTournamentPublicSpreadsheet();
+  tournamentLog_("sheet", "archive_tournament", "", tournament["Tournament Name"]);
 }
 
 function tournamentRenderPublicBracket_(sheet, config, matches) {
@@ -122,6 +195,10 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   const roundNames = [];
   sorted.forEach((match) => { if (!roundNames.includes(match.round)) roundNames.push(match.round); });
   const rounds = roundNames.map((name) => sorted.filter((match) => match.round === name));
+  if (rounds.length > 1 && rounds[0].length >= 8) {
+    tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames);
+    return;
+  }
   const finalMatch = rounds.length ? rounds[rounds.length - 1][0] : null;
   rounds.push([{
     round: "Champion", match_id: "", player1: finalMatch && finalMatch.winner || "TBD",
@@ -174,6 +251,66 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   sheet.setConditionalFormatRules([]);
 }
 
+function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
+  const sideRounds = rounds.length - 1, groupWidth = 4, centerColumn = sideRounds * groupWidth + 1;
+  const totalColumns = centerColumn * 2 + 1, firstSideCount = Math.max(1, Math.ceil(rounds[0].length / 2));
+  const totalRows = Math.max(24, 10 + firstSideCount * 8);
+  if (sheet.getMaxColumns() < totalColumns) sheet.insertColumnsAfter(sheet.getMaxColumns(), totalColumns - sheet.getMaxColumns());
+  if (sheet.getMaxRows() < totalRows) sheet.insertRowsAfter(sheet.getMaxRows(), totalRows - sheet.getMaxRows());
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
+  sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
+  sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
+  sheet.getRange(1, 1, 1, totalColumns).merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament"))
+    .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
+  sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
+    .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+
+  const leftRounds = rounds.slice(0, -1).map((matches) => matches.slice(0, Math.ceil(matches.length / 2)));
+  const rightRounds = rounds.slice(0, -1).map((matches) => matches.slice(Math.ceil(matches.length / 2)));
+  tournamentDrawBracketSide_(sheet, leftRounds, roundNames, false, centerColumn);
+  tournamentDrawBracketSide_(sheet, rightRounds, roundNames, true, centerColumn);
+
+  const firstCenters = Array.from({length: firstSideCount}, (_, index) => 7 + index * 8);
+  let reducedCenters = firstCenters.slice();
+  while (reducedCenters.length > 1) {
+    const next = [];
+    for (let index = 0; index < reducedCenters.length; index += 2) next.push(Math.round((reducedCenters[index] + (reducedCenters[index + 1] === undefined ? reducedCenters[index] : reducedCenters[index + 1])) / 2));
+    reducedCenters = next;
+  }
+  const finalCenter = reducedCenters[0];
+  const finalMatch = rounds[rounds.length - 1][0] || {round: "Final", player1: "TBD", player2: "TBD", status: "Waiting for players"};
+  sheet.getRange(4, centerColumn, 1, 3).merge().setValue("FINAL").setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
+  tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter - 1, finalMatch, false);
+  const champion = {round: "Champion", match_id: "", player1: finalMatch.winner || "TBD", player2: "", status: finalMatch.status === "Complete" ? "Tournament winner" : "To be decided", winner: finalMatch.winner || ""};
+  tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter + 5, champion, true);
+  sheet.getRange(finalCenter + 3, centerColumn + 1, 3, 1).setBorder(null, true, null, null, null, null, "#f47806", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(centerColumn + offset, width));
+  sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
+  sheet.setConditionalFormatRules([]);
+}
+
+function tournamentDrawBracketSide_(sheet, sideRounds, roundNames, mirrored, centerColumn) {
+  let centers = sideRounds[0].map((_, index) => 7 + index * 8);
+  sideRounds.forEach((matches, roundIndex) => {
+    const startColumn = mirrored ? centerColumn + 4 + (sideRounds.length - 1 - roundIndex) * 4 : 1 + roundIndex * 4;
+    sheet.getRange(4, startColumn, 1, 3).merge().setValue(String(roundNames[roundIndex] || "Round").toUpperCase())
+      .setBackground("#00182f").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
+    [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(startColumn + offset, width));
+    const connectorColumn = mirrored ? startColumn - 1 : startColumn + 3;
+    sheet.setColumnWidth(connectorColumn, 34);
+    matches.forEach((match, matchIndex) => tournamentDrawBracketMatch_(sheet, startColumn, centers[matchIndex] - 1, match, false));
+    const nextCenters = [];
+    for (let index = 0; index < centers.length; index += 2) {
+      const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1], parent = Math.round((upper + lower) / 2);
+      nextCenters.push(parent);
+      sheet.getRange(Math.min(upper, lower), connectorColumn, Math.max(1, Math.abs(lower - upper) + 1), 1)
+        .setBorder(null, mirrored, null, !mirrored, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+      [upper, lower, parent].forEach((row) => sheet.getRange(row, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM));
+    }
+    centers = nextCenters;
+  });
+}
+
 function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion) {
   const navy = "#00182f", blue = "#01397a", orange = "#f47806", paper = "#fffefb", green = "#35c27c";
   const scores = String(match.series_score || "").match(/(\d+)\s*[-–]\s*(\d+)/);
@@ -223,6 +360,62 @@ function tournamentEnsureConfig_(setting, value, notes) {
   if (!tournamentRows_(sheet).some((row) => String(row.Setting) === setting)) sheet.appendRow([setting, value, notes || ""]);
 }
 
+function tournamentEnsureInitialTournament_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  if (tournamentRows_(sheet).length) return;
+  const config = tournamentConfig_(), id = String(config["Active Tournament ID"] || "practice-1");
+  sheet.appendRow([
+    id, config["Tournament Name"] || "GeoNederland Practice Tournament", "Practice", config["Tournament Status"] || "Setup",
+    Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
+    config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
+    config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "",
+  ]);
+}
+
+function tournamentMigrateLegacyTournamentIds_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), id = tournamentActiveId_();
+  [TOURNAMENT.SHEETS.PLAYERS, TOURNAMENT.SHEETS.MATCHES, TOURNAMENT.SHEETS.GAMES, TOURNAMENT.SHEETS.LOG].forEach((name) => {
+    const sheet = ss.getSheetByName(name), headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const column = headers.indexOf("Tournament ID") + 1;
+    if (!column || sheet.getLastRow() < 2) return;
+    const range = sheet.getRange(2, column, sheet.getLastRow() - 1, 1), values = range.getValues();
+    let changed = false;
+    values.forEach((row) => { if (!row[0]) { row[0] = id; changed = true; } });
+    if (changed) range.setValues(values);
+  });
+}
+
+function tournamentById_(id) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  return tournamentRows_(sheet).find((row) => String(row["Tournament ID"]) === String(id || "")) || null;
+}
+
+function tournamentActiveId_() {
+  return String(tournamentConfig_()["Active Tournament ID"] || "practice-1");
+}
+
+function tournamentActive_() {
+  const tournament = tournamentById_(tournamentActiveId_());
+  if (!tournament) throw Error("Active Tournament ID does not exist in the Tournaments tab.");
+  return tournament;
+}
+
+function tournamentUpdateActive_(changes) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS), row = tournamentActive_();
+  Object.entries(changes).forEach(([header, value]) => {
+    const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf(header) + 1;
+    if (!column) throw Error("Unknown tournament field: " + header);
+    sheet.getRange(row.__row, column).setValue(value);
+    row[header] = value;
+  });
+  return row;
+}
+
+function tournamentRowsForActive_(sheet) {
+  const id = tournamentActiveId_();
+  return tournamentRows_(sheet).filter((row) => String(row["Tournament ID"] || "") === id);
+}
+
 function setTournamentApiSecret() {
   const ui = SpreadsheetApp.getUi(), response = ui.prompt(
     "Tournament API secret",
@@ -237,43 +430,82 @@ function setTournamentApiSecret() {
 }
 
 function generatePracticeTournament() {
+  generateTournamentBracket();
+}
+
+function generateTournamentBracket() {
   setupTournamentSystem();
-  const ss = SpreadsheetApp.getActiveSpreadsheet(), playersSheet = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
-  const players = tournamentRows_(playersSheet)
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_(), playersSheet = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
+  const players = tournamentRowsForActive_(playersSheet)
     .filter((row) => tournamentBool_(row["Checked In"]) && String(row.Status || "").toLowerCase() !== "withdrawn")
     .sort((a, b) => Number(a.Seed || 999) - Number(b.Seed || 999));
-  if (players.length !== 8) {
-    throw Error("The practice bracket requires exactly 8 checked-in players in Tournament Players.");
-  }
+  if (players.length < 2) throw Error("At least two checked-in players are required.");
+  const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
+  if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " checked-in players.");
+  const configuredSize = Number(tournament["Bracket Size"] || 0);
+  const bracketSize = configuredSize >= players.length ? configuredSize : Math.pow(2, Math.ceil(Math.log(players.length) / Math.log(2)));
+  if (![2, 4, 8, 16, 32, 64].includes(bracketSize)) throw Error("Bracket size must be 2, 4, 8, 16, 32 or 64.");
   const matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
-  if (matchesSheet.getLastRow() > 1) {
+  const oldMatches = tournamentRowsForActive_(matchesSheet);
+  if (oldMatches.length) {
     const choice = SpreadsheetApp.getUi().alert(
-      "Replace practice bracket?",
-      "Existing tournament matches will be cleared. Player and game data will remain.",
+      "Replace active bracket?",
+      "Only matches for " + tournament["Tournament Name"] + " will be replaced. Other tournaments remain untouched.",
       SpreadsheetApp.getUi().ButtonSet.YES_NO,
     );
     if (choice !== SpreadsheetApp.getUi().Button.YES) return;
-    matchesSheet.getRange(2, 1, matchesSheet.getLastRow() - 1, matchesSheet.getLastColumn()).clearContent();
+    for (let index = oldMatches.length - 1; index >= 0; index--) matchesSheet.deleteRow(oldMatches[index].__row);
   }
 
-  const config = tournamentConfig_(), bestOf = Number(config["Default Best Of"] || 3);
-  const presets = [config["Preset 1"] || "", config["Preset 2"] || "", config["Preset 3"] || ""];
-  const bySeed = Object.fromEntries(players.map((p) => [Number(p.Seed), String(p.Player)]));
-  const pairings = [[1, 8], [4, 5], [2, 7], [3, 6]];
-  const rows = pairings.map((pair, index) => tournamentMatchRow_({
-    id: "PT-QF" + (index + 1), round: "Quarterfinal", order: index + 1,
-    player1: bySeed[pair[0]], player2: bySeed[pair[1]], bestOf, presets,
-    next: index < 2 ? "PT-SF1" : "PT-SF2", slot: index % 2 ? 2 : 1,
-  }));
-  rows.push(tournamentMatchRow_({id: "PT-SF1", round: "Semifinal", order: 5, bestOf, presets, next: "PT-F", slot: 1}));
-  rows.push(tournamentMatchRow_({id: "PT-SF2", round: "Semifinal", order: 6, bestOf, presets, next: "PT-F", slot: 2}));
-  rows.push(tournamentMatchRow_({id: "PT-F", round: "Final", order: 7, bestOf, presets, highlighted: true}));
-  matchesSheet.getRange(2, 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
+  const config = tournamentConfig_(), bestOf = Number(tournament["Default Best Of"] || config["Default Best Of"] || 3);
+  const presets = [tournament["Preset 1"] || config["Preset 1"] || "", tournament["Preset 2"] || config["Preset 2"] || "", tournament["Preset 3"] || config["Preset 3"] || ""];
+  const seeded = {};
+  players.forEach((player, index) => seeded[Number(player.Seed || index + 1)] = String(player.Player));
+  const seedOrder = tournamentSeedOrder_(bracketSize), rounds = Math.log(bracketSize) / Math.log(2), rows = [];
+  let order = 1, previousCount = bracketSize / 2;
+  for (let matchIndex = 0; matchIndex < previousCount; matchIndex++) {
+    const player1 = seeded[seedOrder[matchIndex * 2]] || "BYE", player2 = seeded[seedOrder[matchIndex * 2 + 1]] || "BYE";
+    rows.push(tournamentMatchRow_({
+      id: tournament["Tournament ID"] + "-R1-M" + (matchIndex + 1), round: tournamentRoundName_(rounds, 1), order: order++,
+      player1, player2, bestOf, presets, next: rounds === 1 ? "" : tournament["Tournament ID"] + "-R2-M" + (Math.floor(matchIndex / 2) + 1),
+      slot: matchIndex % 2 + 1, highlighted: rounds === 1, tournamentId: tournament["Tournament ID"],
+    }));
+  }
+  for (let round = 2; round <= rounds; round++) {
+    const count = bracketSize / Math.pow(2, round);
+    for (let matchIndex = 0; matchIndex < count; matchIndex++) {
+      const final = round === rounds;
+      rows.push(tournamentMatchRow_({
+        id: tournament["Tournament ID"] + "-R" + round + "-M" + (matchIndex + 1), round: tournamentRoundName_(rounds, round), order: order++,
+        bestOf, presets, next: final ? "" : tournament["Tournament ID"] + "-R" + (round + 1) + "-M" + (Math.floor(matchIndex / 2) + 1),
+        slot: matchIndex % 2 + 1, highlighted: final, tournamentId: tournament["Tournament ID"],
+      }));
+    }
+  }
+  matchesSheet.getRange(matchesSheet.getLastRow() + 1, 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
   tournamentFormat_(ss);
-  tournamentLog_("sheet", "generate_bracket", "", "Generated 8-player practice bracket");
-  const publicId = tournamentSpreadsheetId_(config["Public Spreadsheet ID"]);
+  tournamentLog_("sheet", "generate_bracket", "", "Generated " + bracketSize + "-player bracket");
+  const publicId = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
   if (publicId) syncTournamentPublicSpreadsheet();
-  ss.toast("Practice bracket generated.", "GeoNederland Tournament", 6);
+  ss.toast(bracketSize + "-player bracket generated.", "GeoNederland Tournament", 6);
+}
+
+function tournamentSeedOrder_(size) {
+  let order = [1, 2];
+  while (order.length < size) {
+    const nextSize = order.length * 2, next = [];
+    order.forEach((seed) => { next.push(seed); next.push(nextSize + 1 - seed); });
+    order = next;
+  }
+  return order;
+}
+
+function tournamentRoundName_(totalRounds, round) {
+  const remaining = totalRounds - round;
+  if (remaining === 0) return "Final";
+  if (remaining === 1) return "Semifinal";
+  if (remaining === 2) return "Quarterfinal";
+  return "Round of " + Math.pow(2, remaining + 1);
 }
 
 function tournamentMatchRow_(input) {
@@ -282,7 +514,7 @@ function tournamentMatchRow_(input) {
     input.id, input.round, input.order, input.player1 || "TBD", input.player2 || "TBD",
     input.bestOf || 3, input.presets[0] || "", input.presets[1] || "", input.presets[2] || "",
     Boolean(input.highlighted), false, false, false, status, "", "0-0", "",
-    input.next || "", input.slot || "", "", "", "", new Date(),
+    input.next || "", input.slot || "", "", "", "", new Date(), input.tournamentId || tournamentActiveId_(),
   ];
 }
 
@@ -356,7 +588,7 @@ function doGet(e) {
     tournamentAuthorize_(e && e.parameter && e.parameter.secret);
     const action = String(e.parameter.action || "health");
     if (action === "health") return tournamentJson_({ok: true, service: "geonederland-tournament"});
-    if (action === "bracket") return tournamentJson_({ok: true, config: tournamentConfig_(), matches: tournamentPublicMatches_()});
+    if (action === "bracket") return tournamentJson_({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()});
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
     throw Error("Unknown action: " + action);
   } catch (error) {
@@ -377,7 +609,7 @@ function doPost(e) {
 
 function tournamentPublicMatches_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
-  return tournamentRows_(sheet).map(tournamentPublicMatch_);
+  return tournamentRowsForActive_(sheet).map(tournamentPublicMatch_);
 }
 
 function tournamentPublicMatch_(row) {
@@ -402,7 +634,7 @@ function tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayNa
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
   const id = String(discordUserId || "").trim(), names = [discordName, discordDisplayName]
     .map((value) => String(value || "").trim().replace(/^@/, "").toLowerCase()).filter(Boolean);
-  return tournamentRows_(sheet).find((row) => {
+  return tournamentRowsForActive_(sheet).find((row) => {
     const rowId = String(row["Discord User ID"] || "").trim(), rowName = String(row.Discord || "").trim().replace(/^@/, "").toLowerCase();
     return (id && rowId === id) || (rowName && names.includes(rowName));
   }) || null;
@@ -411,7 +643,7 @@ function tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayNa
 function tournamentMatchForUser_(discordUserId, discordName, discordDisplayName) {
   const player = tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayName);
   if (!player) return null;
-  const matches = tournamentRows_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES));
+  const matches = tournamentRowsForActive_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES));
   const match = matches.find((row) => !["Complete", "Disqualified"].includes(String(row.Status)) && [row["Player 1"], row["Player 2"]].includes(player.Player));
   return match ? tournamentPublicMatch_(match) : null;
 }
@@ -456,24 +688,24 @@ function tournamentPlayerPublic_(row, created) {
 }
 
 function tournamentRegister_(payload) {
-  const config = tournamentConfig_();
+  const config = tournamentConfig_(), tournament = tournamentActive_();
   if (String(config["Registration Status"] || "Closed").toLowerCase() !== "open") throw Error("Tournament registration is closed.");
   const identity = tournamentRegistrationIdentity_(payload), player = String(payload.player || "").trim();
   const country = String(payload.country || "").trim().toUpperCase(), geoId = tournamentGeoGuessrUserId_(payload.geoguessr_profile);
   if (player.length < 2 || player.length > 40) throw Error("Player name must contain 2 to 40 characters.");
   if (!["NL", "BE", "LU"].includes(country)) throw Error("Country must be NL, BE or LU.");
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), rows = tournamentRows_(sheet);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), rows = tournamentRowsForActive_(sheet);
   const own = rows.find((row) => String(row["Discord User ID"] || "") === identity.discordId);
   const conflict = rows.find((row) => String(row["Discord User ID"] || "") !== identity.discordId && (
     String(row["GeoGuessr User ID"] || "").toLowerCase() === geoId.toLowerCase() || String(row.Player || "").toLowerCase() === player.toLowerCase()
   ));
   if (conflict) throw Error("That GeoGuessr account or player name is already registered.");
   if (!own) {
-    const maximum = Number(config["Maximum Players"] || 32);
+    const maximum = Math.min(64, Number(tournament["Maximum Players"] || config["Maximum Players"] || 32));
     if (rows.filter((row) => !["Withdrawn", "Disqualified"].includes(String(row.Status))).length >= maximum) throw Error("Tournament registration is full.");
   }
   const now = new Date(), values = [own ? own.Seed : "", player, geoId, identity.discordName, identity.discordId, country,
-    "Registered", false, own && own["Registered At"] || now, "", now, own && own.Notes || ""];
+    "Registered", false, own && own["Registered At"] || now, "", now, own && own.Notes || "", tournamentActiveId_()];
   const rowNumber = own ? own.__row : sheet.getLastRow() + 1;
   sheet.getRange(rowNumber, 1, 1, TOURNAMENT.HEADERS.PLAYERS.length).setValues([values]);
   tournamentLog_(identity.discordId, own ? "registration_updated" : "registered", "", player + " · " + country);
@@ -503,7 +735,7 @@ function tournamentUnregister_(payload) {
 
 function tournamentFindMatch_(matchId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
-  const match = tournamentRows_(sheet).find((row) => String(row["Match ID"]) === String(matchId || ""));
+  const match = tournamentRowsForActive_(sheet).find((row) => String(row["Match ID"]) === String(matchId || ""));
   if (!match) throw Error("Match not found: " + matchId);
   match.__sheet = sheet;
   return match;
@@ -526,7 +758,7 @@ function tournamentWriteMatch_(match, changes) {
   const updatedColumn = headers.indexOf("Updated At") + 1;
   match.__sheet.getRange(match.__row, updatedColumn).setValue(new Date());
   try {
-    if (tournamentSpreadsheetId_(tournamentConfig_()["Public Spreadsheet ID"])) syncTournamentPublicSpreadsheet();
+    if (tournamentSpreadsheetId_(tournamentActive_()["Public Spreadsheet ID"])) syncTournamentPublicSpreadsheet();
   } catch (error) {
     tournamentLog_("system", "public_sync_error", match["Match ID"], String(error.message || error));
   }
@@ -558,11 +790,11 @@ function tournamentSubmitResult_(match, discordUserId, url, discordName, discord
   const value = String(url || "").trim();
   if (!/^https:\/\/(www\.)?geoguessr\.com\//i.test(value)) throw Error("Enter a valid GeoGuessr result link.");
   const gamesSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.GAMES);
-  const existing = tournamentRows_(gamesSheet).filter((row) => String(row["Match ID"]) === String(match["Match ID"]));
+  const existing = tournamentRowsForActive_(gamesSheet).filter((row) => String(row["Match ID"]) === String(match["Match ID"]));
   const gameNumber = existing.length + 1;
   if (existing.some((row) => String(row["Result URL"]) === value)) throw Error("This result link has already been submitted.");
   const mode = ["Moving", "No Move", "NMPZ"][Math.min(gameNumber - 1, 2)] || "Tiebreak";
-  gamesSheet.appendRow([new Date(), match["Match ID"], gameNumber, mode, value, String(discordUserId), "", "", "", "Pending review", ""]);
+  gamesSheet.appendRow([new Date(), match["Match ID"], gameNumber, mode, value, String(discordUserId), "", "", "", "Pending review", "", tournamentActiveId_()]);
   tournamentLog_(discordUserId, "result", match["Match ID"], value);
   return tournamentWriteMatch_(match, {Status: "Pending result"});
 }
@@ -598,5 +830,5 @@ function tournamentResolve_(match, actor, winner, score) {
 
 function tournamentLog_(actor, action, matchId, details) {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName(TOURNAMENT.SHEETS.LOG);
-  if (sheet) sheet.appendRow([new Date(), String(actor || ""), action, matchId || "", details || ""]);
+  if (sheet) sheet.appendRow([new Date(), String(actor || ""), action, matchId || "", details || "", tournamentActiveId_()]);
 }

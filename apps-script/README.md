@@ -8,8 +8,10 @@ to either Lowlands League Season 2 spreadsheet.
 - Admin: `GeoNederland Tournament Control - Admin`
 - Public: `GeoNederland Tournament - Public Bracket`
 
-The Admin sheet owns all state. The Public sheet contains only the bracket and
-schedule generated from that state.
+The Admin sheet is a permanent tournament hub. Every event has a stable
+`Tournament ID`; player registrations, matches, games, party links, results and
+logs are tagged with that ID and are never reset for the next event. The
+`Tournaments` tab links each event to its own read-only Public bracket Sheet.
 
 ## Installation
 
@@ -17,7 +19,8 @@ schedule generated from that state.
 2. Choose **Extensions → Apps Script**.
 3. Replace the starter source with `Code.gs` and save.
 4. Reload the Admin spreadsheet and run **Tournament Control → Set up / repair Admin sheet**.
-5. Run **Tournament Control → Set up / repair Public bracket**.
+5. Use **Tournament Control → Create new tournament** for every practice event,
+   qualifier, MBO event or LCQ. This automatically creates its Public Sheet.
 6. Set a random secret of at least 32 characters through **Set Discord API secret**.
 7. Deploy the script as a web app, executing as the owner and accessible to anyone with the URL.
 8. Put the `/exec` URL and the same secret in Render as `TOURNAMENT_API_URL` and `TOURNAMENT_API_SECRET`.
@@ -46,3 +49,17 @@ bracket**. The generated bracket uses 1–8, 4–5, 2–7 and 3–6 quarterfinal
 Party and result links arrive through Discord. Result links remain pending until
 an administrator confirms the winner. This is intentional for the rehearsal;
 automatic parsing will be added after capturing a real GeoGuessr Party result.
+
+## Multiple tournaments and archives
+
+- **Create new tournament** makes a registry row and a separate Public Sheet.
+- **Switch active tournament** changes which tournament Discord commands and
+  Admin actions operate on.
+- **Archive active tournament** closes registration without deleting any data.
+- The central tables retain every historical row and can be filtered by
+  `Tournament ID`.
+
+Brackets support 8, 16, 32 and 64-player tournament limits. The actual bracket
+uses the smallest suitable power of two unless `Bracket Size` is explicitly
+overridden. Large brackets are rendered as two mirrored halves that converge on
+the final in the centre.

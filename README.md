@@ -178,10 +178,12 @@ Render configuration lives in `render.yaml`. For local development, copy
 ## Tournament control
 
 The tournament module is deliberately separate from the Season 2 league Sheets.
-Install `apps-script/Tournament.gs` in a new Tournament Admin spreadsheet and
-enter the ID of a second, read-only Public bracket spreadsheet on its `Tournament`
-tab. The Admin menu creates the tournament tables, public bracket and an eight-player
-practice bracket.
+Install `apps-script/Tournament.gs` in the permanent GeoNederland Tournament
+Admin spreadsheet. Its `Tournaments` registry stores every event and creates a
+separate read-only Public bracket Sheet for each practice tournament, qualifier,
+MBO tournament or LCQ. Player, match, game, party-link, result and log rows remain
+in the Admin hub and are separated by `Tournament ID`; starting a new event never
+resets an older one.
 
 Deploy the Tournament Admin Apps Script as a web app that executes as the owner and
 is accessible to anyone with the deployment URL. Authentication is still required:
@@ -208,3 +210,8 @@ Admin commands:
 Result links enter `Pending review` in the first practice version. An administrator
 confirms the winner with `resolvematch`; automatic GeoGuessr result parsing can be
 added after a real Party result response has been captured during the rehearsal.
+
+The bracket generator supports tournament limits of 8, 16, 32 and 64 players and
+uses the smallest suitable power-of-two bracket unless an administrator overrides
+`Bracket Size`. Larger brackets render as mirrored left and right halves converging
+on the final in the centre.
