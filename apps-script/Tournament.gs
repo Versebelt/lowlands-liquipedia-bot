@@ -251,7 +251,7 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
         const connector = sheet.getRange(Math.min(upper, lower), startColumn + 3, Math.max(1, Math.abs(lower - upper) + 1), 1);
         connector.setBorder(null, null, null, true, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(upper, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-        sheet.getRange(lower, startColumn + 3).setBorder(null, null, true, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+        sheet.getRange(lower, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(parent, startColumn + 3).setBackground("#01397a");
       }
       centers = nextCenters;
@@ -293,9 +293,9 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   const finalMatch = rounds[rounds.length - 1][0] || {round: "Final", player1: "TBD", player2: "TBD", status: "Waiting for players"};
   sheet.getRange(4, centerColumn, 1, 3).merge().setValue("FINAL").setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
   tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter - 1, finalMatch, false);
-  sheet.getRange(finalCenter, centerColumn - 1, 1, 2)
+  sheet.getRange(finalCenter, centerColumn - 1)
     .setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  sheet.getRange(finalCenter, centerColumn + 3, 1, 2)
+  sheet.getRange(finalCenter, centerColumn + 3)
     .setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   const champion = {round: "Champion", match_id: "", player1: finalMatch.winner || "TBD", player2: "", status: finalMatch.status === "Complete" ? "Tournament winner" : "To be decided", winner: finalMatch.winner || ""};
   tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter + 5, champion, true);
@@ -315,6 +315,7 @@ function tournamentDrawBracketSide_(sheet, sideRounds, roundNames, mirrored, cen
     const connectorColumn = mirrored ? startColumn - 1 : startColumn + 3;
     sheet.setColumnWidth(connectorColumn, 34);
     matches.forEach((match, matchIndex) => tournamentDrawBracketMatch_(sheet, startColumn, centers[matchIndex] - 1, match, false));
+    if (roundIndex === sideRounds.length - 1) return;
     const nextCenters = [];
     for (let index = 0; index < centers.length; index += 2) {
       const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1], parent = Math.round((upper + lower) / 2);
