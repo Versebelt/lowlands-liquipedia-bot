@@ -541,7 +541,8 @@ function tournamentFormat_(ss) {
   Object.values(TOURNAMENT.SHEETS).forEach((name) => {
     const sheet = ss.getSheetByName(name);
     if (!sheet) return;
-    sheet.setFrozenRows(1).setHiddenGridlines(true);
+    sheet.setFrozenRows(1);
+    sheet.setHiddenGridlines(true);
     const lastColumn = sheet.getLastColumn();
     sheet.getRange(1, 1, 1, lastColumn).setBackground("#00182f").setFontColor("#ffffff").setFontWeight("bold");
     sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), lastColumn).setVerticalAlignment("middle");
