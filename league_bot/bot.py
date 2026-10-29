@@ -398,8 +398,9 @@ def week_embed(number: int, rows: list[dict[str, str]], page_url: str) -> discor
     return embed
 
 
-def commands_embed(page: int = 0) -> discord.Embed:
-    page = max(0, min(page, len(COMMAND_PAGES) - 1))
+def commands_embed(page: int = 0, allow_admin: bool = False) -> discord.Embed:
+    maximum_page = len(COMMAND_PAGES) - 1 if allow_admin else len(COMMAND_PAGES) - 2
+    page = max(0, min(page, maximum_page))
     page_title, sections = COMMAND_PAGES[page]
     embed = discord.Embed(
         title=f"GeoNederland bot · {page_title}",
@@ -416,27 +417,36 @@ def commands_embed(page: int = 0) -> discord.Embed:
             ),
             inline=False,
         )
-    embed.set_footer(text=f"Categorie {page + 1}/{len(COMMAND_PAGES)} · Alleen beheerders kunnen beheercommando's uitvoeren")
+    category_count = len(COMMAND_PAGES) if allow_admin else len(COMMAND_PAGES) - 1
+    footer = f"Categorie {page + 1}/{category_count}"
+    if allow_admin:
+        footer += " · Beheercommando's zijn alleen voor serverbeheerders"
+    embed.set_footer(text=footer)
     return embed
 
 
 class CommandCategorySelect(discord.ui.Select):
-    def __init__(self, page: int = 0) -> None:
+    def __init__(self, page: int = 0, allow_admin: bool = False) -> None:
+        self.allow_admin = allow_admin
+        visible_pages = COMMAND_PAGES if allow_admin else COMMAND_PAGES[:-1]
         options = [
             discord.SelectOption(label=title, value=str(index), default=index == page)
-            for index, (title, _sections) in enumerate(COMMAND_PAGES)
+            for index, (title, _sections) in enumerate(visible_pages)
         ]
         super().__init__(placeholder="Kies een commandocategorie", options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         page = int(self.values[0])
-        await interaction.response.edit_message(embed=commands_embed(page), view=CommandsView(page))
+        await interaction.response.edit_message(
+            embed=commands_embed(page, self.allow_admin),
+            view=CommandsView(page, self.allow_admin),
+        )
 
 
 class CommandsView(discord.ui.View):
-    def __init__(self, page: int = 0) -> None:
+    def __init__(self, page: int = 0, allow_admin: bool = False) -> None:
         super().__init__(timeout=300)
-        self.add_item(CommandCategorySelect(page))
+        self.add_item(CommandCategorySelect(page, allow_admin))
 
 
 def admin_config_embed(config: AdminConfig) -> discord.Embed:
@@ -885,7 +895,12 @@ async def handle_prefix_command(message: discord.Message) -> None:
             page_url = await asyncio.to_thread(client.sheet.tab_url, f"Week {number}")
             await message.reply(embed=week_embed(number, rows, page_url), mention_author=False)
         elif command in {"commands", "help"}:
-            await message.reply(embed=commands_embed(), view=CommandsView(), mention_author=False)
+            admin = is_admin(message.author)
+            await message.reply(
+                embed=commands_embed(allow_admin=admin),
+                view=CommandsView(allow_admin=admin),
+                mention_author=False,
+            )
         elif command == "stats":
             if not argument:
                 await message.reply("Usage: `!stats <name>`", mention_author=False)
@@ -1189,7 +1204,12 @@ async def week(interaction: discord.Interaction, number: app_commands.Range[int,
 
 @client.tree.command(name="commands", description="Show all Lowlands League bot commands")
 async def command_list(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message(embed=commands_embed(), view=CommandsView(), ephemeral=True)
+    admin = is_admin(interaction.user)
+    await interaction.response.send_message(
+        embed=commands_embed(allow_admin=admin),
+        view=CommandsView(allow_admin=admin),
+        ephemeral=True,
+    )
 
 
 @client.tree.command(name="stats", description="Show a detailed Lowlands League player card")
