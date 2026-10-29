@@ -252,7 +252,6 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
         connector.setBorder(null, null, null, true, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(upper, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(lower, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-        sheet.getRange(parent + 1, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
       }
       centers = nextCenters;
     }
@@ -323,7 +322,6 @@ function tournamentDrawBracketSide_(sheet, sideRounds, roundNames, mirrored, cen
       sheet.getRange(Math.min(upper, lower), connectorColumn, Math.max(1, Math.abs(lower - upper)), 1)
         .setBorder(null, mirrored, null, !mirrored, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
       [upper, lower].forEach((row) => sheet.getRange(row, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM));
-      sheet.getRange(parent + 1, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
     }
     centers = nextCenters;
   });
