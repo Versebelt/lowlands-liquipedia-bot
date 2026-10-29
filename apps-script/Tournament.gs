@@ -110,20 +110,90 @@ function syncTournamentPublicSpreadsheet() {
 }
 
 function tournamentRenderPublicBracket_(sheet, config, matches) {
+  const sorted = matches.slice().sort((a, b) => a.order - b.order);
+  if (!sorted.length) {
+    [["Quarterfinal", 4], ["Semifinal", 2], ["Final", 1]].forEach(([round, count]) => {
+      for (let index = 0; index < count; index++) sorted.push({
+        round, order: sorted.length + 1, match_id: "TBD", player1: "TBD", player2: "TBD",
+        series_score: "0-0", status: "Waiting for players", highlighted: false, winner: "",
+      });
+    });
+  }
+  const roundNames = [];
+  sorted.forEach((match) => { if (!roundNames.includes(match.round)) roundNames.push(match.round); });
+  const rounds = roundNames.map((name) => sorted.filter((match) => match.round === name));
+  const finalMatch = rounds.length ? rounds[rounds.length - 1][0] : null;
+  rounds.push([{
+    round: "Champion", match_id: "", player1: finalMatch && finalMatch.winner || "TBD",
+    player2: "", series_score: "", status: finalMatch && finalMatch.status === "Complete" ? "Tournament winner" : "To be decided",
+    highlighted: false, winner: finalMatch && finalMatch.winner || "",
+  }]);
+
+  const firstRoundCount = Math.max(1, rounds[0].length), totalColumns = Math.max(3, rounds.length * 4 - 1);
+  const totalRows = Math.max(16, 8 + firstRoundCount * 8);
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
   sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
-  sheet.getRange("A1:H1").merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament")).setBackground("#00182f").setFontColor("#ffffff").setFontSize(18).setFontWeight("bold");
-  sheet.getRange("A2:H2").merge().setValue("Official bracket · " + String(config["Tournament Status"] || "Setup")).setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold");
-  const headers = ["Round", "Match", "Player 1", "Player 2", "Score", "Status", "Broadcast", "Scheduled"];
-  sheet.getRange(3, 1, 1, headers.length).setValues([headers]).setBackground("#00182f").setFontColor("#ffffff").setFontWeight("bold");
-  const rows = matches.sort((a, b) => a.order - b.order).map((m) => [m.round, m.match_id, m.player1, m.player2, m.series_score, m.status, m.highlighted ? "Highlighted" : "", m.scheduled_at || ""]);
-  if (rows.length) sheet.getRange(4, 1, rows.length, headers.length).setValues(rows);
-  sheet.setConditionalFormatRules([
-    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("Complete").setBackground("#d9ead3").setRanges([sheet.getRange("F4:F")]).build(),
-    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("Live").setBackground("#f4cccc").setRanges([sheet.getRange("F4:F")]).build(),
-    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("Waiting for broadcast").setBackground("#fff2cc").setRanges([sheet.getRange("F4:F")]).build(),
-    SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo("Highlighted").setBackground("#d9d2e9").setRanges([sheet.getRange("G4:G")]).build(),
-  ]);
-  [120, 110, 180, 180, 90, 170, 120, 170].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
+  sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
+  sheet.getRange(1, 1, 1, totalColumns).merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament"))
+    .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
+  sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config["Tournament Status"] || "Setup").toUpperCase())
+    .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+
+  let centers = rounds[0].map((_, index) => 7 + index * 8);
+  rounds.forEach((roundMatches, roundIndex) => {
+    const startColumn = 1 + roundIndex * 4;
+    const title = roundNames[roundIndex] || "Champion";
+    sheet.getRange(4, startColumn, 1, 3).merge().setValue(String(title).toUpperCase())
+      .setBackground(roundIndex === rounds.length - 1 ? "#f47806" : "#00182f")
+      .setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
+    [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(startColumn + offset, width));
+    if (roundIndex < rounds.length - 1) sheet.setColumnWidth(startColumn + 3, 34);
+
+    roundMatches.forEach((match, matchIndex) => {
+      const center = centers[matchIndex], top = center - 1;
+      tournamentDrawBracketMatch_(sheet, startColumn, top, match, roundIndex === rounds.length - 1);
+    });
+
+    if (roundIndex < rounds.length - 1) {
+      const nextCenters = [];
+      for (let index = 0; index < centers.length; index += 2) {
+        const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1];
+        const parent = Math.round((upper + lower) / 2);
+        nextCenters.push(parent);
+        const connector = sheet.getRange(Math.min(upper, lower), startColumn + 3, Math.max(1, Math.abs(lower - upper) + 1), 1);
+        connector.setBorder(null, null, null, true, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+        sheet.getRange(upper, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+        sheet.getRange(lower, startColumn + 3).setBorder(null, null, true, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+        sheet.getRange(parent, startColumn + 3).setBackground("#01397a");
+      }
+      centers = nextCenters;
+    }
+  });
+
+  sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
+  sheet.setConditionalFormatRules([]);
+}
+
+function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion) {
+  const navy = "#00182f", blue = "#01397a", orange = "#f47806", paper = "#fffefb", green = "#35c27c";
+  const scores = String(match.series_score || "").match(/(\d+)\s*[-–]\s*(\d+)/);
+  const playerOneScore = scores ? scores[1] : "", playerTwoScore = scores ? scores[2] : "";
+  const header = champion ? "CHAMPION" : String(match.match_id || match.round || "MATCH");
+  sheet.getRange(topRow, startColumn, 1, 3).merge().setValue(header)
+    .setBackground(champion ? orange : blue).setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+  const playerOne = sheet.getRange(topRow + 1, startColumn, 1, 2).merge().setValue(String(match.player1 || "TBD"));
+  const playerOneScoreCell = sheet.getRange(topRow + 1, startColumn + 2).setValue(playerOneScore);
+  const playerTwo = sheet.getRange(topRow + 2, startColumn, 1, 2).merge().setValue(String(match.player2 || ""));
+  const playerTwoScoreCell = sheet.getRange(topRow + 2, startColumn + 2).setValue(playerTwoScore);
+  sheet.getRange(topRow + 1, startColumn, 2, 3).setBackground(paper).setFontWeight("bold")
+    .setBorder(true, true, true, true, true, true, navy, SpreadsheetApp.BorderStyle.SOLID);
+  playerOneScoreCell.setHorizontalAlignment("center"); playerTwoScoreCell.setHorizontalAlignment("center");
+  if (match.winner && String(match.winner) === String(match.player1)) playerOne.setBackground(green);
+  if (match.winner && String(match.winner) === String(match.player2)) playerTwo.setBackground(green);
+  if (champion && match.player1 && match.player1 !== "TBD") playerOne.setBackground(green).setFontSize(14);
+  const status = [match.status, match.highlighted ? "Broadcast" : ""].filter(Boolean).join(" · ");
+  sheet.getRange(topRow + 3, startColumn, 1, 3).merge().setValue(status)
+    .setBackground(navy).setFontColor("#ffffff").setFontSize(9).setHorizontalAlignment("left");
 }
 
 function tournamentRenderPublicSchedule_(sheet, config, matches) {
