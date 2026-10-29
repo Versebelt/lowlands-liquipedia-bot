@@ -239,7 +239,7 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
 
     roundMatches.forEach((match, matchIndex) => {
       const center = centers[matchIndex], top = center - 1;
-      tournamentDrawBracketMatch_(sheet, startColumn, top, match, roundIndex === rounds.length - 1);
+      tournamentDrawBracketMatch_(sheet, startColumn, top, match, roundIndex === rounds.length - 1, roundIndex < rounds.length - 1 ? "right" : "");
     });
 
     if (roundIndex < rounds.length - 1) {
@@ -248,11 +248,11 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
         const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1];
         const parent = Math.round((upper + lower) / 2);
         nextCenters.push(parent);
-        const connector = sheet.getRange(Math.min(upper, lower), startColumn + 3, Math.max(1, Math.abs(lower - upper) + 1), 1);
+        const connector = sheet.getRange(Math.min(upper, lower), startColumn + 3, Math.max(1, Math.abs(lower - upper)), 1);
         connector.setBorder(null, null, null, true, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(upper, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(lower, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-        sheet.getRange(parent, startColumn + 3).setBackground("#01397a");
+        sheet.getRange(parent + 1, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
       }
       centers = nextCenters;
     }
@@ -292,7 +292,7 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   const finalCenter = reducedCenters[0];
   const finalMatch = rounds[rounds.length - 1][0] || {round: "Final", player1: "TBD", player2: "TBD", status: "Waiting for players"};
   sheet.getRange(4, centerColumn, 1, 3).merge().setValue("FINAL").setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
-  tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter - 1, finalMatch, false);
+  tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter - 1, finalMatch, false, "both");
   sheet.getRange(finalCenter, centerColumn - 1)
     .setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   sheet.getRange(finalCenter, centerColumn + 3)
@@ -314,21 +314,22 @@ function tournamentDrawBracketSide_(sheet, sideRounds, roundNames, mirrored, cen
     [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(startColumn + offset, width));
     const connectorColumn = mirrored ? startColumn - 1 : startColumn + 3;
     sheet.setColumnWidth(connectorColumn, 34);
-    matches.forEach((match, matchIndex) => tournamentDrawBracketMatch_(sheet, startColumn, centers[matchIndex] - 1, match, false));
+    matches.forEach((match, matchIndex) => tournamentDrawBracketMatch_(sheet, startColumn, centers[matchIndex] - 1, match, false, mirrored ? "left" : "right"));
     if (roundIndex === sideRounds.length - 1) return;
     const nextCenters = [];
     for (let index = 0; index < centers.length; index += 2) {
       const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1], parent = Math.round((upper + lower) / 2);
       nextCenters.push(parent);
-      sheet.getRange(Math.min(upper, lower), connectorColumn, Math.max(1, Math.abs(lower - upper) + 1), 1)
+      sheet.getRange(Math.min(upper, lower), connectorColumn, Math.max(1, Math.abs(lower - upper)), 1)
         .setBorder(null, mirrored, null, !mirrored, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-      [upper, lower, parent].forEach((row) => sheet.getRange(row, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM));
+      [upper, lower].forEach((row) => sheet.getRange(row, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM));
+      sheet.getRange(parent + 1, connectorColumn).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
     }
     centers = nextCenters;
   });
 }
 
-function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion) {
+function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion, openSide) {
   const navy = "#00182f", blue = "#01397a", orange = "#f47806", paper = "#fffefb", green = "#35c27c";
   const scores = String(match.series_score || "").match(/(\d+)\s*[-–]\s*(\d+)/);
   const playerOneScore = scores ? scores[1] : "", playerTwoScore = scores ? scores[2] : "";
@@ -341,6 +342,14 @@ function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion
   const playerTwoScoreCell = sheet.getRange(topRow + 2, startColumn + 2).setValue(playerTwoScore);
   sheet.getRange(topRow + 1, startColumn, 2, 3).setBackground(paper).setFontWeight("bold")
     .setBorder(true, true, true, true, true, true, navy, SpreadsheetApp.BorderStyle.SOLID);
+  if (openSide === "right" || openSide === "both") {
+    sheet.getRange(topRow + 1, startColumn + 2, 2, 1)
+      .setBorder(null, null, null, false, null, null);
+  }
+  if (openSide === "left" || openSide === "both") {
+    sheet.getRange(topRow + 1, startColumn, 2, 1)
+      .setBorder(null, false, null, null, null, null);
+  }
   playerOneScoreCell.setHorizontalAlignment("center"); playerTwoScoreCell.setHorizontalAlignment("center");
   if (match.winner && String(match.winner) === String(match.player1)) playerOne.setBackground(green);
   if (match.winner && String(match.winner) === String(match.player2)) playerTwo.setBackground(green);
