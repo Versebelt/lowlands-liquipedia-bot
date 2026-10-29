@@ -13,6 +13,7 @@ function onOpen() {
     .addItem("Switch active tournament", "switchActiveTournament")
     .addItem("Archive active tournament", "archiveActiveTournament")
     .addSeparator()
+    .addItem("Randomize player seeding", "randomizeTournamentSeeding")
     .addItem("Validate player seeding", "validateTournamentSeeding")
     .addItem("Generate bracket", "generateTournamentBracket")
     .addItem("Sync Public bracket", "syncTournamentPublicSpreadsheet")
@@ -432,6 +433,34 @@ function setTournamentApiSecret() {
 
 function generatePracticeTournament() {
   generateTournamentBracket();
+}
+
+function randomizeTournamentSeeding() {
+  setupTournamentSystem();
+  const players = tournamentCheckedInPlayers_();
+  if (players.length < 2) throw Error("At least two checked-in players are required.");
+  if (players.length > 64) throw Error("A bracket supports at most 64 checked-in players.");
+  const ui = SpreadsheetApp.getUi(), answer = ui.alert(
+    "Randomize player seeding?",
+    "This replaces the current seeds for " + players.length + " checked-in players in the active tournament.",
+    ui.ButtonSet.YES_NO,
+  );
+  if (answer !== ui.Button.YES) return;
+
+  const seeds = Array.from({length: players.length}, (_, index) => index + 1);
+  for (let index = seeds.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [seeds[index], seeds[swapIndex]] = [seeds[swapIndex], seeds[index]];
+  }
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
+  players.forEach((player, index) => sheet.getRange(player.__row, 1).setValue(seeds[index]));
+  tournamentLog_("sheet", "randomize_seeding", "", "Randomized " + players.length + " checked-in players");
+  SpreadsheetApp.flush();
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    players.length + " players received random seeds 1–" + players.length + ".",
+    "GeoNederland Tournament",
+    6,
+  );
 }
 
 function validateTournamentSeeding() {

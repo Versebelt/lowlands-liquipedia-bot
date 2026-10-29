@@ -48,6 +48,10 @@ Use **Tournament Control → Validate player seeding** to check the list, follow
 by **Generate bracket**. Missing, duplicate, invalid or skipped seeds block
 generation with a clear error instead of silently changing the placements.
 
+Alternatively, use **Randomize player seeding** to assign unique random seeds
+`1` through the number of checked-in players. The action asks for confirmation
+before replacing any existing seeds and affects only the active tournament.
+
 Before any bracket has been generated, every Public Sheet shows a complete empty
 32-player bracket. Once generated, it switches to the actual configured bracket
 size and places players according to the manual seeds.
