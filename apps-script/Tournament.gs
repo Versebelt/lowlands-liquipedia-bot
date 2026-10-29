@@ -100,6 +100,7 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Maximum Players", 32, "New registrations stop at this number");
   tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
   tournamentEnsureInitialTournament_();
+  tournamentCleanGhostTournamentIds_();
   tournamentMigrateLegacyTournamentIds_();
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
 }
@@ -185,7 +186,10 @@ function archiveActiveTournament() {
 }
 
 function tournamentRenderPublicBracket_(sheet, config, matches) {
-  const sorted = matches.slice().sort((a, b) => a.order - b.order);
+  const sorted = matches
+    .filter((match) => String(match.match_id || "").trim() || String(match.round || "").trim())
+    .slice()
+    .sort((a, b) => a.order - b.order);
   if (!sorted.length) {
     [["Round of 32", 16], ["Round of 16", 8], ["Quarterfinal", 4], ["Semifinal", 2], ["Final", 1]].forEach(([round, count]) => {
       for (let index = 0; index < count; index++) sorted.push({
@@ -197,7 +201,9 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   const roundNames = [];
   sorted.forEach((match) => { if (!roundNames.includes(match.round)) roundNames.push(match.round); });
   const rounds = roundNames.map((name) => sorted.filter((match) => match.round === name));
-  if (rounds.length > 1 && rounds[0].length >= 8) {
+  // Up to eight players reads best from left to right. From sixteen players
+  // onwards, split the bracket into two halves that converge on a centre final.
+  if (rounds.length > 1 && rounds[0].length > 4) {
     tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames);
     return;
   }
@@ -283,6 +289,10 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   const finalMatch = rounds[rounds.length - 1][0] || {round: "Final", player1: "TBD", player2: "TBD", status: "Waiting for players"};
   sheet.getRange(4, centerColumn, 1, 3).merge().setValue("FINAL").setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
   tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter - 1, finalMatch, false);
+  sheet.getRange(finalCenter, centerColumn - 1, 1, 2)
+    .setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  sheet.getRange(finalCenter, centerColumn + 3, 1, 2)
+    .setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   const champion = {round: "Champion", match_id: "", player1: finalMatch.winner || "TBD", player2: "", status: finalMatch.status === "Complete" ? "Tournament winner" : "To be decided", winner: finalMatch.winner || ""};
   tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter + 5, champion, true);
   sheet.getRange(finalCenter + 3, centerColumn + 1, 3, 1).setBorder(null, true, null, null, null, null, "#f47806", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
@@ -384,6 +394,34 @@ function tournamentMigrateLegacyTournamentIds_() {
     let changed = false;
     values.forEach((row) => { if (!row[0]) { row[0] = id; changed = true; } });
     if (changed) range.setValues(values);
+  });
+}
+
+function tournamentCleanGhostTournamentIds_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const identityHeaders = {
+    [TOURNAMENT.SHEETS.PLAYERS]: "Player",
+    [TOURNAMENT.SHEETS.MATCHES]: "Match ID",
+    [TOURNAMENT.SHEETS.GAMES]: "Match ID",
+    [TOURNAMENT.SHEETS.LOG]: "Timestamp",
+  };
+  Object.entries(identityHeaders).forEach(([name, identityHeader]) => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || sheet.getLastRow() < 2) return;
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+    const identityColumn = headers.indexOf(identityHeader), tournamentColumn = headers.indexOf("Tournament ID");
+    if (identityColumn < 0 || tournamentColumn < 0) return;
+    const rowCount = sheet.getLastRow() - 1, values = sheet.getRange(2, 1, rowCount, sheet.getLastColumn()).getValues();
+    const tournamentIds = values.map((row) => [row[tournamentColumn]]);
+    let changed = false;
+    values.forEach((row, index) => {
+      const identity = row[identityColumn], hasIdentity = identity instanceof Date || String(identity || "").trim() !== "";
+      if (!hasIdentity && tournamentIds[index][0] !== "") {
+        tournamentIds[index][0] = "";
+        changed = true;
+      }
+    });
+    if (changed) sheet.getRange(2, tournamentColumn + 1, rowCount, 1).setValues(tournamentIds);
   });
 }
 
@@ -637,10 +675,22 @@ function tournamentFormat_(ss) {
 function tournamentRows_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return [];
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const identityHeaders = {
+    [TOURNAMENT.SHEETS.CONFIG]: "Setting",
+    [TOURNAMENT.SHEETS.TOURNAMENTS]: "Tournament ID",
+    [TOURNAMENT.SHEETS.PLAYERS]: "Player",
+    [TOURNAMENT.SHEETS.MATCHES]: "Match ID",
+    [TOURNAMENT.SHEETS.GAMES]: "Match ID",
+    [TOURNAMENT.SHEETS.LOG]: "Timestamp",
+  };
+  const identityHeader = identityHeaders[sheet.getName()] || headers[0];
   return sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues().map((values, index) => {
     const row = {__row: index + 2};
     headers.forEach((header, col) => row[header] = values[col]);
     return row;
+  }).filter((row) => {
+    const identity = row[identityHeader];
+    return identity instanceof Date || String(identity || "").trim() !== "";
   });
 }
 

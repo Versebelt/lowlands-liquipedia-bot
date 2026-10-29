@@ -72,4 +72,6 @@ automatic parsing will be added after capturing a real GeoGuessr Party result.
 Brackets support 8, 16, 32 and 64-player tournament limits. The actual bracket
 uses the smallest suitable power of two unless `Bracket Size` is explicitly
 overridden. Large brackets are rendered as two mirrored halves that converge on
-the final in the centre.
+the final in the centre. Brackets with up to eight players use the compact
+left-to-right layout; brackets with 16 or more players always work from both
+outer edges towards the centre.
