@@ -14,8 +14,17 @@ from discord import app_commands
 
 from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
 from .sheets import DEFAULT_SPREADSHEET_ID, PublicSheet, SheetError, display_number
+from .tournament import (
+    TournamentApi,
+    TournamentError,
+    tournament_bracket_embed,
+    tournament_match_embed,
+    tournament_registration_embed,
+)
 
-PUBLIC_URL = f"https://docs.google.com/spreadsheets/d/{DEFAULT_SPREADSHEET_ID}"
+PUBLIC_URL = os.environ.get(
+    "GEONEDERLAND_LEAGUE_URL", "https://geonederland.gg/leagues.html"
+).strip()
 BLUE = 0x1E9DDB
 ORANGE = 0xE75325
 YELLOW = 0xEFAC1F
@@ -55,6 +64,13 @@ COMMAND_PAGES = (
         ("Matchups", (
             ("/predict player_one player_two", "!predict <name 1> | <name 2>", "Form-based prediction"),
             ("/randommatch", "!randommatch", "Generate a random matchup"),
+        )),
+        ("Tournament", (
+            ("/inschrijven · /register", "!inschrijven · !register", "Inschrijven voor het toernooi"),
+            ("/inchecken · /checkin", "!inchecken · !checkin", "Aanwezigheid bevestigen"),
+            ("/uitschrijven · /unregister", "!uitschrijven · !unregister", "Inschrijving intrekken"),
+            ("/mijnwedstrijd · /mymatch", "!mijnwedstrijd · !mymatch", "Je actieve wedstrijd openen"),
+            ("/schema · /bracket", "!schema · !bracket", "Het actuele toernooischema tonen"),
         )),
         ("Administrator", (
             ("/adminconfig", "!adminconfig", "Show reminder configuration"),
@@ -160,6 +176,7 @@ class LowlandsClient(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.sheet = PublicSheet(os.environ.get("LOWLANDS_SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID))
+        self.tournament = TournamentApi.from_env()
         self.guild_id = int(required_env("DISCORD_GUILD_ID"))
 
     async def setup_hook(self) -> None:
@@ -207,6 +224,79 @@ class LowlandsClient(discord.Client):
 
 
 client = LowlandsClient()
+
+
+class TournamentUrlModal(discord.ui.Modal):
+    url = discord.ui.TextInput(label="GeoGuessr URL", placeholder="https://www.geoguessr.com/...", max_length=500)
+
+    def __init__(self, match_id: str, action: str, title: str) -> None:
+        super().__init__(title=title)
+        self.match_id = match_id
+        self.action = action
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            match = await asyncio.to_thread(
+                client.tournament.post,
+                self.action,
+                match_id=self.match_id,
+                discord_user_id=str(interaction.user.id),
+                discord_name=interaction.user.name,
+                discord_display_name=getattr(interaction.user, "display_name", ""),
+                url=str(self.url),
+            )
+            await interaction.followup.send(
+                embed=tournament_match_embed(match),
+                view=TournamentMatchView(match),
+                ephemeral=True,
+            )
+        except TournamentError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+
+
+class TournamentMatchView(discord.ui.View):
+    def __init__(self, match: dict[str, object]) -> None:
+        super().__init__(timeout=900)
+        self.match = match
+        blocked = bool(match.get("highlighted")) and not bool(match.get("admin_released"))
+        ready = bool(match.get("player1_ready")) and bool(match.get("player2_ready"))
+        self.party.disabled = not ready or blocked
+        self.result.disabled = not bool(match.get("party_url"))
+        if ready and not blocked:
+            for index, preset in enumerate(match.get("presets") or [], start=1):
+                if preset:
+                    self.add_item(discord.ui.Button(label=f"Game {index} preset", url=str(preset), emoji="🗺️"))
+
+    @discord.ui.button(label="Ready", style=discord.ButtonStyle.success, emoji="✅")
+    async def ready(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.defer(ephemeral=True)
+        try:
+            match = await asyncio.to_thread(
+                client.tournament.post,
+                "ready",
+                match_id=str(self.match.get("match_id") or ""),
+                discord_user_id=str(interaction.user.id),
+                discord_name=interaction.user.name,
+                discord_display_name=getattr(interaction.user, "display_name", ""),
+            )
+            await interaction.edit_original_response(
+                embed=tournament_match_embed(match), view=TournamentMatchView(match)
+            )
+        except TournamentError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+
+    @discord.ui.button(label="Submit party", style=discord.ButtonStyle.primary, emoji="🎮")
+    async def party(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_modal(
+            TournamentUrlModal(str(self.match.get("match_id") or ""), "party", "Submit GeoGuessr party")
+        )
+
+    @discord.ui.button(label="Submit result", style=discord.ButtonStyle.secondary, emoji="🏁")
+    async def result(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await interaction.response.send_modal(
+            TournamentUrlModal(str(self.match.get("match_id") or ""), "result", "Submit GeoGuessr result")
+        )
 
 
 def standings_embed(
@@ -729,6 +819,16 @@ async def handle_prefix_command(message: discord.Message) -> None:
     command, _, argument = message.content[1:].strip().partition(" ")
     command = command.casefold()
     argument = argument.strip()
+    command = {
+        "inschrijven": "register",
+        "inchecken": "checkin",
+        "uitschrijven": "unregister",
+        "mijnwedstrijd": "mymatch",
+        "schema": "bracket",
+        "wedstrijdvrijgeven": "releasematch",
+        "wedstrijduitlichten": "highlightmatch",
+        "uitslagbevestigen": "resolvematch",
+    }.get(command, command)
 
     try:
         if command == "ping":
@@ -899,6 +999,59 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 return
             page_url = await asyncio.to_thread(client.sheet.tab_url, "Player Stats")
             await message.reply(embed=prediction_embed(left, right, page_url), mention_author=False)
+        elif command == "register":
+            parts = [part.strip() for part in argument.split("|")]
+            if len(parts) != 3 or not all(parts):
+                await message.reply("Usage: `!register <player name> | <GeoGuessr profile URL> | <NL|BE|LU>`", mention_author=False)
+                return
+            player = await asyncio.to_thread(
+                client.tournament.post, "register", player=parts[0], geoguessr_profile=parts[1], country=parts[2],
+                discord_user_id=str(message.author.id), discord_name=message.author.name,
+                discord_display_name=message.author.display_name,
+            )
+            await message.reply(embed=tournament_registration_embed(player, "register"), mention_author=False)
+        elif command in {"checkin", "unregister"}:
+            player = await asyncio.to_thread(
+                client.tournament.post, command, discord_user_id=str(message.author.id),
+                discord_name=message.author.name, discord_display_name=message.author.display_name,
+            )
+            await message.reply(embed=tournament_registration_embed(player, command), mention_author=False)
+        elif command == "mymatch":
+            match = await asyncio.to_thread(client.tournament.match_for_user, message.author.id, message.author.name, message.author.display_name)
+            if not match:
+                await message.reply("You do not have an active tournament match.", mention_author=False)
+                return
+            await message.reply(
+                embed=tournament_match_embed(match),
+                view=TournamentMatchView(match),
+                mention_author=False,
+            )
+        elif command == "bracket":
+            payload = await asyncio.to_thread(client.tournament.bracket)
+            await message.reply(embed=tournament_bracket_embed(payload), mention_author=False)
+        elif command in {"releasematch", "highlightmatch", "resolvematch"}:
+            if not is_admin(message.author):
+                await message.reply("This command is only available to server administrators.", mention_author=False)
+                return
+            parts = argument.split()
+            if command == "releasematch":
+                if len(parts) != 1:
+                    await message.reply("Usage: `!releasematch <match-id>`", mention_author=False)
+                    return
+                match = await asyncio.to_thread(client.tournament.post, "release", match_id=parts[0], actor=str(message.author.id))
+            elif command == "highlightmatch":
+                if len(parts) != 2 or parts[1].casefold() not in {"on", "off"}:
+                    await message.reply("Usage: `!highlightmatch <match-id> <on|off>`", mention_author=False)
+                    return
+                match = await asyncio.to_thread(client.tournament.post, "highlight", match_id=parts[0], actor=str(message.author.id), highlighted=parts[1].casefold() == "on")
+            else:
+                if len(parts) < 3:
+                    await message.reply("Usage: `!resolvematch <match-id> <winner> <score>`", mention_author=False)
+                    return
+                match_id, score = parts[0], parts[-1]
+                winner = " ".join(parts[1:-1])
+                match = await asyncio.to_thread(client.tournament.post, "resolve", match_id=match_id, actor=str(message.author.id), winner=winner, score=score)
+            await message.reply(embed=tournament_match_embed(match), mention_author=False)
         elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
@@ -949,6 +1102,9 @@ async def handle_prefix_command(message: discord.Message) -> None:
             "The public results could not be loaded right now. Please try again shortly.",
             mention_author=False,
         )
+    except TournamentError as exc:
+        logging.exception("Tournament prefix command failed")
+        await message.reply(str(exc), mention_author=False)
     except (discord.Forbidden, discord.HTTPException, ValueError, RuntimeError) as exc:
         logging.exception("Admin prefix command failed")
         await message.reply(f"Admin configuration failed: {exc}", mention_author=False)
@@ -961,6 +1117,14 @@ async def sheet_failure(interaction: discord.Interaction, error: Exception) -> N
         await interaction.followup.send(message, ephemeral=True)
     else:
         await interaction.response.send_message(message, ephemeral=True)
+
+
+async def tournament_failure(interaction: discord.Interaction, error: Exception) -> None:
+    logging.exception("Tournament command failed", exc_info=error)
+    if interaction.response.is_done():
+        await interaction.followup.send(str(error), ephemeral=True)
+    else:
+        await interaction.response.send_message(str(error), ephemeral=True)
 
 
 @client.tree.command(name="ping", description="Check whether the Lowlands League bot is online")
@@ -1244,6 +1408,185 @@ async def predict(interaction: discord.Interaction, player_one: str, player_two:
         await interaction.followup.send(embed=prediction_embed(left, right, page_url))
     except SheetError as exc:
         await sheet_failure(interaction, exc)
+
+
+@client.tree.command(name="mymatch", description="Open your active tournament match")
+async def mymatch(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    try:
+        match = await asyncio.to_thread(client.tournament.match_for_user, interaction.user.id, interaction.user.name, getattr(interaction.user, "display_name", ""))
+        if not match:
+            await interaction.followup.send("You do not have an active tournament match.", ephemeral=True)
+            return
+        payload = await asyncio.to_thread(client.tournament.bracket)
+        bracket_url = str((payload.get("config") or {}).get("Public Bracket URL") or "")
+        await interaction.followup.send(
+            embed=tournament_match_embed(match, bracket_url),
+            view=TournamentMatchView(match),
+            ephemeral=True,
+        )
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="register", description="Register for the GeoNederland Tournament")
+@app_commands.describe(player="Your tournament display name", geoguessr_profile="GeoGuessr profile URL or user ID", country="NL, BE or LU")
+async def register(interaction: discord.Interaction, player: str, geoguessr_profile: str, country: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result = await asyncio.to_thread(
+            client.tournament.post, "register", player=player, geoguessr_profile=geoguessr_profile, country=country,
+            discord_user_id=str(interaction.user.id), discord_name=interaction.user.name,
+            discord_display_name=getattr(interaction.user, "display_name", ""),
+        )
+        await interaction.followup.send(embed=tournament_registration_embed(result, "register"), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="checkin", description="Confirm that you are present for the GeoNederland Tournament")
+async def checkin(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result = await asyncio.to_thread(
+            client.tournament.post, "checkin", discord_user_id=str(interaction.user.id),
+            discord_name=interaction.user.name, discord_display_name=getattr(interaction.user, "display_name", ""),
+        )
+        await interaction.followup.send(embed=tournament_registration_embed(result, "checkin"), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="unregister", description="Withdraw your GeoNederland Tournament registration")
+async def unregister(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    try:
+        result = await asyncio.to_thread(
+            client.tournament.post, "unregister", discord_user_id=str(interaction.user.id),
+            discord_name=interaction.user.name, discord_display_name=getattr(interaction.user, "display_name", ""),
+        )
+        await interaction.followup.send(embed=tournament_registration_embed(result, "unregister"), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="bracket", description="Show the current tournament bracket")
+async def bracket(interaction: discord.Interaction) -> None:
+    await interaction.response.defer()
+    try:
+        payload = await asyncio.to_thread(client.tournament.bracket)
+        await interaction.followup.send(embed=tournament_bracket_embed(payload))
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="releasematch", description="Allow a highlighted tournament match to start")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(match_id="Match ID from the tournament bracket")
+async def releasematch(interaction: discord.Interaction, match_id: str) -> None:
+    if not is_admin(interaction.user):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        match = await asyncio.to_thread(
+            client.tournament.post,
+            "release",
+            match_id=match_id,
+            actor=str(interaction.user.id),
+        )
+        await interaction.followup.send(embed=tournament_match_embed(match), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="highlightmatch", description="Mark or unmark a featured tournament match")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(match_id="Match ID from the tournament bracket", highlighted="Whether this is a broadcast match")
+async def highlightmatch(interaction: discord.Interaction, match_id: str, highlighted: bool) -> None:
+    if not is_admin(interaction.user):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        match = await asyncio.to_thread(
+            client.tournament.post,
+            "highlight",
+            match_id=match_id,
+            actor=str(interaction.user.id),
+            highlighted=highlighted,
+        )
+        await interaction.followup.send(embed=tournament_match_embed(match), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="resolvematch", description="Confirm a tournament match result and advance its winner")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(match_id="Match ID", winner="Exact player name", score="Final series score, for example 2-1")
+async def resolvematch(interaction: discord.Interaction, match_id: str, winner: str, score: str) -> None:
+    if not is_admin(interaction.user):
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        match = await asyncio.to_thread(
+            client.tournament.post,
+            "resolve",
+            match_id=match_id,
+            actor=str(interaction.user.id),
+            winner=winner,
+            score=score,
+        )
+        await interaction.followup.send(embed=tournament_match_embed(match), ephemeral=True)
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+# Nederlandse slash-commandaliassen. De Engelse varianten blijven beschikbaar
+# voor internationale deelnemers en bestaande documentatie.
+@client.tree.command(name="inschrijven", description="Schrijf je in voor het GeoNederland-toernooi")
+@app_commands.describe(speler="Je spelersnaam", geoguessr_profiel="GeoGuessr-profiel-URL of gebruikers-ID", land="NL, BE of LU")
+async def inschrijven(interaction: discord.Interaction, speler: str, geoguessr_profiel: str, land: str) -> None:
+    await register.callback(interaction, speler, geoguessr_profiel, land)
+
+
+@client.tree.command(name="inchecken", description="Bevestig dat je aanwezig bent voor het toernooi")
+async def inchecken(interaction: discord.Interaction) -> None:
+    await checkin.callback(interaction)
+
+
+@client.tree.command(name="uitschrijven", description="Trek je inschrijving voor het toernooi in")
+async def uitschrijven(interaction: discord.Interaction) -> None:
+    await unregister.callback(interaction)
+
+
+@client.tree.command(name="mijnwedstrijd", description="Open je actieve toernooiwedstrijd")
+async def mijnwedstrijd(interaction: discord.Interaction) -> None:
+    await mymatch.callback(interaction)
+
+
+@client.tree.command(name="schema", description="Toon het actuele toernooischema")
+async def schema(interaction: discord.Interaction) -> None:
+    await bracket.callback(interaction)
+
+
+@client.tree.command(name="wedstrijdvrijgeven", description="Geef een uitgelichte wedstrijd vrij om te starten")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(wedstrijd_id="Wedstrijd-ID uit het toernooischema")
+async def wedstrijdvrijgeven(interaction: discord.Interaction, wedstrijd_id: str) -> None:
+    await releasematch.callback(interaction, wedstrijd_id)
+
+
+@client.tree.command(name="wedstrijduitlichten", description="Markeer een wedstrijd als uitgelichte uitzending")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(wedstrijd_id="Wedstrijd-ID", uitgelicht="Wel of niet uitlichten")
+async def wedstrijduitlichten(interaction: discord.Interaction, wedstrijd_id: str, uitgelicht: bool) -> None:
+    await highlightmatch.callback(interaction, wedstrijd_id, uitgelicht)
+
+
+@client.tree.command(name="uitslagbevestigen", description="Bevestig de uitslag en plaats de winnaar door")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(wedstrijd_id="Wedstrijd-ID", winnaar="Exacte spelersnaam", score="Eindstand, bijvoorbeeld 2-1")
+async def uitslagbevestigen(interaction: discord.Interaction, wedstrijd_id: str, winnaar: str, score: str) -> None:
+    await resolvematch.callback(interaction, wedstrijd_id, winnaar, score)
 
 
 async def admin_failure(interaction: discord.Interaction, error: Exception) -> None:

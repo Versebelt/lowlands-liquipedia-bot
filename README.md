@@ -137,6 +137,9 @@ Additional visual commands are available in both forms:
 - `/commands` or `!commands` shows the complete in-Discord command guide.
 
 The service reads only the public spreadsheet and caches results for two minutes.
+General competition cards link to `GEONEDERLAND_LEAGUE_URL` (by default
+`https://geonederland.gg/leagues.html`); detailed week and statistics links
+continue to open the exact public Sheet tab as their underlying data source.
 
 ### Keeping interactive commands online on Render Free
 
@@ -171,3 +174,37 @@ back to the existing repository secrets until `/setupreminders` has been run.
 Render configuration lives in `render.yaml`. For local development, copy
 `.env.example` to `.env`, install `requirements.txt`, and run
 `python -m league_bot.bot`.
+
+## Tournament control
+
+The tournament module is deliberately separate from the Season 2 league Sheets.
+Install `apps-script/Tournament.gs` in a new Tournament Admin spreadsheet and
+enter the ID of a second, read-only Public bracket spreadsheet on its `Tournament`
+tab. The Admin menu creates the tournament tables, public bracket and an eight-player
+practice bracket.
+
+Deploy the Tournament Admin Apps Script as a web app that executes as the owner and
+is accessible to anyone with the deployment URL. Authentication is still required:
+create a 32+ character secret through **Tournament Control → Set Discord API secret**
+and configure these Render environment variables with matching values:
+
+- `TOURNAMENT_API_URL`: the Apps Script `/exec` deployment URL.
+- `TOURNAMENT_API_SECRET`: the secret stored in Apps Script Properties.
+
+Player commands:
+
+- `/inschrijven`, `/register`, `!inschrijven` or `!register`: tournament registration.
+- `/inchecken`, `/checkin`, `!inchecken` or `!checkin`: confirm attendance.
+- `/uitschrijven`, `/unregister`, `!uitschrijven` or `!unregister`: withdraw while preserving the audit trail.
+- `/mijnwedstrijd`, `/mymatch`, `!mijnwedstrijd` or `!mymatch`: readiness, presets, party and result submission.
+- `/schema`, `/bracket`, `!schema` or `!bracket`: current public bracket summary.
+
+Admin commands:
+
+- `/wedstrijduitlichten`, `/wedstrijdvrijgeven`, and `/uitslagbevestigen`.
+- English aliases remain `/highlightmatch`, `/releasematch`, and `/resolvematch`.
+- Prefix equivalents use `!highlightmatch`, `!releasematch`, and `!resolvematch`.
+
+Result links enter `Pending review` in the first practice version. An administrator
+confirms the winner with `resolvematch`; automatic GeoGuessr result parsing can be
+added after a real Party result response has been captured during the rehearsal.

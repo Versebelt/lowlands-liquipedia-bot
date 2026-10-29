@@ -14,5 +14,11 @@ services:
         sync: false
       - key: LOWLANDS_SPREADSHEET_ID
         value: 15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4
+      - key: GEONEDERLAND_LEAGUE_URL
+        value: https://geonederland.gg/leagues.html
       - key: LOG_LEVEL
         value: INFO
+      - key: TOURNAMENT_API_URL
+        sync: false
+      - key: TOURNAMENT_API_SECRET
+        sync: false
