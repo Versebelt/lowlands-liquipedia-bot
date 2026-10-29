@@ -41,7 +41,7 @@ const TOURNAMENT = {
     TOURNAMENTS: [
       "Tournament ID", "Tournament Name", "Type", "Status", "Maximum Players", "Bracket Size",
       "Default Best Of", "Preset 1", "Preset 2", "Preset 3", "Public Spreadsheet ID",
-      "Public Bracket URL", "Stream URL", "Created At", "Archived At",
+      "Public Bracket URL", "Stream URL", "Created At", "Archived At", "Rules URL",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -98,6 +98,7 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Registration Status", "Open", "Open / Closed");
   tournamentEnsureConfig_("Registration Deadline", "", "Optional deadline shown in Discord");
   tournamentEnsureConfig_("Maximum Players", 32, "New registrations stop at this number");
+  tournamentEnsureConfig_("Rules URL", "", "Public link to the current tournament regulations");
   tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
   tournamentEnsureInitialTournament_();
   tournamentCleanGhostTournamentIds_();
@@ -146,7 +147,7 @@ function createTournament() {
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
-    publicSs.getId(), publicSs.getUrl(), "", new Date(), ""];
+    publicSs.getId(), publicSs.getUrl(), "", new Date(), "", ""];
   SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS).appendRow(row);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
@@ -171,6 +172,7 @@ function switchActiveTournament() {
   tournamentSetConfig_("Tournament Name", tournament["Tournament Name"]);
   tournamentSetConfig_("Tournament Status", tournament.Status);
   tournamentSetConfig_("Maximum Players", tournament["Maximum Players"]);
+  tournamentSetConfig_("Rules URL", tournament["Rules URL"] || "");
   SpreadsheetApp.getActiveSpreadsheet().toast(tournament["Tournament Name"] + " is now active.", "GeoNederland Tournament", 6);
 }
 
@@ -223,6 +225,7 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
     .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
   sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config["Tournament Status"] || "Setup").toUpperCase())
     .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+  tournamentDrawRulesLink_(sheet, totalColumns, config);
 
   let centers = rounds[0].map((_, index) => 7 + index * 8);
   rounds.forEach((roundMatches, roundIndex) => {
@@ -272,6 +275,7 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
     .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
   sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
     .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+  tournamentDrawRulesLink_(sheet, totalColumns, config);
 
   const leftRounds = rounds.slice(0, -1).map((matches) => matches.slice(0, Math.ceil(matches.length / 2)));
   const rightRounds = rounds.slice(0, -1).map((matches) => matches.slice(Math.ceil(matches.length / 2)));
@@ -345,6 +349,18 @@ function tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, champion
     .setBackground(navy).setFontColor("#ffffff").setFontSize(9).setHorizontalAlignment("left");
 }
 
+function tournamentDrawRulesLink_(sheet, totalColumns, config) {
+  const url = String(config["Rules URL"] || "").trim(), range = sheet.getRange(3, 1, 1, totalColumns).merge();
+  range.setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+  if (!url) {
+    range.setValue("TOURNAMENT RULES · Link not configured");
+    return;
+  }
+  range.setRichTextValue(
+    SpreadsheetApp.newRichTextValue().setText("TOURNAMENT RULES · OPEN REGULATIONS").setLinkUrl(url).build(),
+  );
+}
+
 function tournamentRenderPublicSchedule_(sheet, config, matches) {
   sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
   sheet.getRange("A1:G1").merge().setValue("Tournament schedule").setBackground("#00182f").setFontColor("#ffffff").setFontSize(18).setFontWeight("bold");
@@ -380,7 +396,7 @@ function tournamentEnsureInitialTournament_() {
     id, config["Tournament Name"] || "GeoNederland Practice Tournament", "Practice", config["Tournament Status"] || "Setup",
     Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
     config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
-    config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "",
+    config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "", config["Rules URL"] || "",
   ]);
 }
 
@@ -906,7 +922,10 @@ function tournamentSetReady_(match, discordUserId, discordName, discordDisplayNa
 }
 
 function tournamentSetParty_(match, discordUserId, url, discordName, discordDisplayName) {
-  tournamentRequireParticipant_(match, discordUserId, discordName, discordDisplayName);
+  const player = tournamentRequireParticipant_(match, discordUserId, discordName, discordDisplayName);
+  if (String(player.Player) !== String(match["Player 1"])) {
+    throw Error("Only " + match["Player 1"] + " (the upper/left player) can create the party and submit its link.");
+  }
   const value = String(url || "").trim();
   if (!/^https:\/\/(www\.)?geoguessr\.com\/(party|game|duels)\//i.test(value)) throw Error("Enter a valid GeoGuessr party link.");
   if (!(tournamentBool_(match["Player 1 Ready"]) && tournamentBool_(match["Player 2 Ready"]))) throw Error("Both players must be ready first.");

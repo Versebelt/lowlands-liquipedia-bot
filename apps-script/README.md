@@ -60,6 +60,15 @@ Party and result links arrive through Discord. Result links remain pending until
 an administrator confirms the winner. This is intentional for the rehearsal;
 automatic parsing will be added after capturing a real GeoGuessr Party result.
 
+Set `Rules URL` on the active row of `Tournaments`. The public bracket and the
+Discord commands `/reglement`, `/rules`, `!reglement` and `!rules` all use this
+same link.
+
+Player 1 is the upper player in the bracket and the left player in Discord.
+Player 1 hosts the GeoGuessr party and is the only participant allowed to submit
+the party link. Player 2 joins through that link; administrators and casters use
+the stored link when they need to spectate the match.
+
 ## Multiple tournaments and archives
 
 - **Create new tournament** makes a registry row and a separate Public Sheet.

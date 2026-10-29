@@ -20,6 +20,7 @@ from .tournament import (
     tournament_bracket_embed,
     tournament_match_embed,
     tournament_registration_embed,
+    tournament_rules_embed,
 )
 
 PUBLIC_URL = os.environ.get(
@@ -77,6 +78,7 @@ COMMAND_PAGES = (
         ("Wedstrijden", (
             ("/mijnwedstrijd · /mymatch", "!mijnwedstrijd · !mymatch", "Je actieve wedstrijd openen"),
             ("/schema · /bracket", "!schema · !bracket", "Het actuele toernooischema tonen"),
+            ("/reglement · /rules", "!reglement · !rules", "Het actuele toernooireglement openen"),
         )),
     )),
     ("Beheer", (
@@ -299,10 +301,10 @@ class TournamentMatchView(discord.ui.View):
         except TournamentError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
 
-    @discord.ui.button(label="Submit party", style=discord.ButtonStyle.primary, emoji="🎮")
+    @discord.ui.button(label="Partylink insturen (Player 1)", style=discord.ButtonStyle.primary, emoji="🎮")
     async def party(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await interaction.response.send_modal(
-            TournamentUrlModal(str(self.match.get("match_id") or ""), "party", "Submit GeoGuessr party")
+            TournamentUrlModal(str(self.match.get("match_id") or ""), "party", "GeoGuessr-partylink insturen")
         )
 
     @discord.ui.button(label="Submit result", style=discord.ButtonStyle.secondary, emoji="🏁")
@@ -845,6 +847,8 @@ async def handle_prefix_command(message: discord.Message) -> None:
         "uitschrijven": "unregister",
         "mijnwedstrijd": "mymatch",
         "schema": "bracket",
+        "regels": "rules",
+        "reglement": "rules",
         "wedstrijdvrijgeven": "releasematch",
         "wedstrijduitlichten": "highlightmatch",
         "uitslagbevestigen": "resolvematch",
@@ -1046,14 +1050,23 @@ async def handle_prefix_command(message: discord.Message) -> None:
             if not match:
                 await message.reply("You do not have an active tournament match.", mention_author=False)
                 return
+            payload = await asyncio.to_thread(client.tournament.bracket)
+            config = payload.get("config") or {}
             await message.reply(
-                embed=tournament_match_embed(match),
+                embed=tournament_match_embed(
+                    match,
+                    str(config.get("Public Bracket URL") or ""),
+                    str(config.get("Rules URL") or ""),
+                ),
                 view=TournamentMatchView(match),
                 mention_author=False,
             )
         elif command == "bracket":
             payload = await asyncio.to_thread(client.tournament.bracket)
             await message.reply(embed=tournament_bracket_embed(payload), mention_author=False)
+        elif command == "rules":
+            payload = await asyncio.to_thread(client.tournament.bracket)
+            await message.reply(embed=tournament_rules_embed(payload), mention_author=False)
         elif command in {"releasematch", "highlightmatch", "resolvematch"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
@@ -1449,9 +1462,11 @@ async def mymatch(interaction: discord.Interaction) -> None:
             await interaction.followup.send("You do not have an active tournament match.", ephemeral=True)
             return
         payload = await asyncio.to_thread(client.tournament.bracket)
-        bracket_url = str((payload.get("config") or {}).get("Public Bracket URL") or "")
+        config = payload.get("config") or {}
+        bracket_url = str(config.get("Public Bracket URL") or "")
+        rules_url = str(config.get("Rules URL") or "")
         await interaction.followup.send(
-            embed=tournament_match_embed(match, bracket_url),
+            embed=tournament_match_embed(match, bracket_url, rules_url),
             view=TournamentMatchView(match),
             ephemeral=True,
         )
@@ -1506,6 +1521,16 @@ async def bracket(interaction: discord.Interaction) -> None:
     try:
         payload = await asyncio.to_thread(client.tournament.bracket)
         await interaction.followup.send(embed=tournament_bracket_embed(payload))
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="rules", description="Open the current tournament regulations")
+async def rules(interaction: discord.Interaction) -> None:
+    await interaction.response.defer(ephemeral=True)
+    try:
+        payload = await asyncio.to_thread(client.tournament.bracket)
+        await interaction.followup.send(embed=tournament_rules_embed(payload), ephemeral=True)
     except TournamentError as exc:
         await tournament_failure(interaction, exc)
 
@@ -1596,6 +1621,11 @@ async def mijnwedstrijd(interaction: discord.Interaction) -> None:
 @client.tree.command(name="schema", description="Toon het actuele toernooischema")
 async def schema(interaction: discord.Interaction) -> None:
     await bracket.callback(interaction)
+
+
+@client.tree.command(name="reglement", description="Open het actuele toernooireglement")
+async def reglement(interaction: discord.Interaction) -> None:
+    await rules.callback(interaction)
 
 
 @client.tree.command(name="wedstrijdvrijgeven", description="Geef een uitgelichte wedstrijd vrij om te starten")

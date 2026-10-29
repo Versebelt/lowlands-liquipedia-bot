@@ -7,6 +7,7 @@ from league_bot.tournament import (
     tournament_bracket_embed,
     tournament_match_embed,
     tournament_registration_embed,
+    tournament_rules_embed,
 )
 
 
@@ -58,10 +59,14 @@ class TournamentTests(unittest.TestCase):
         self.assertEqual(body["action"], "ready")
 
     def test_match_embed_shows_broadcast_lock_and_readiness(self):
-        embed = tournament_match_embed(MATCH)
+        embed = tournament_match_embed(MATCH, rules_url="https://example.com/rules")
         self.assertIn("Trekk", embed.description)
-        self.assertIn("Waiting for admin start permission", embed.fields[-1].value)
         self.assertIn("Not ready", embed.fields[0].value)
+        host_field = next(field for field in embed.fields if field.name == "Party host")
+        self.assertIn("Trekk", host_field.value)
+        self.assertIn("bovenste/linker speler", host_field.value)
+        self.assertTrue(any(field.name == "Reglement" for field in embed.fields))
+        self.assertTrue(any("Waiting for admin start permission" in field.value for field in embed.fields))
 
     def test_bracket_embed_groups_rounds_and_marks_highlighted_match(self):
         embed = tournament_bracket_embed(
@@ -70,6 +75,13 @@ class TournamentTests(unittest.TestCase):
         self.assertEqual(embed.title, "Practice Cup")
         self.assertEqual(embed.fields[0].name, "Quarterfinal")
         self.assertIn("📺", embed.fields[0].value)
+
+    def test_rules_embed_links_current_regulations(self):
+        embed = tournament_rules_embed(
+            {"config": {"Tournament Name": "Practice Cup", "Rules URL": "https://example.com/rules"}}
+        )
+        self.assertEqual(embed.url, "https://example.com/rules")
+        self.assertIn("volledige toernooireglement", embed.description)
 
 
 if __name__ == "__main__":

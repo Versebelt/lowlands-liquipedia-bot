@@ -200,6 +200,7 @@ Player commands:
 - `/uitschrijven`, `/unregister`, `!uitschrijven` or `!unregister`: withdraw while preserving the audit trail.
 - `/mijnwedstrijd`, `/mymatch`, `!mijnwedstrijd` or `!mymatch`: readiness, presets, party and result submission.
 - `/schema`, `/bracket`, `!schema` or `!bracket`: current public bracket summary.
+- `/reglement`, `/rules`, `!reglement` or `!rules`: open the regulations for the active tournament.
 
 Admin commands:
 
@@ -215,3 +216,13 @@ The bracket generator supports tournament limits of 8, 16, 32 and 64 players and
 uses the smallest suitable power-of-two bracket unless an administrator overrides
 `Bracket Size`. Larger brackets render as mirrored left and right halves converging
 on the final in the centre.
+
+Set `Rules URL` on the active row in the Admin Sheet's `Tournaments` tab. That
+single link is shown in the public bracket, Discord bracket, personal match card,
+and the dedicated rules commands.
+
+Player 1 is always the upper player in the public bracket and the left player in
+Discord reading order. Player 1 creates the GeoGuessr party and submits its link
+after both players are ready. Player 2 joins through that link. Administrators
+and casters can use the stored party link for spectating. The API rejects party
+links submitted by Player 2; either participant may still submit a result link.

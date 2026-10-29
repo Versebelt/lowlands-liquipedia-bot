@@ -74,11 +74,13 @@ class TournamentApi:
         return self.get("bracket")
 
 
-def tournament_match_embed(match: dict[str, Any], bracket_url: str = "") -> discord.Embed:
+def tournament_match_embed(match: dict[str, Any], bracket_url: str = "", rules_url: str = "") -> discord.Embed:
     highlighted = bool(match.get("highlighted"))
+    player_one = str(match.get("player1") or "TBD")
+    player_two = str(match.get("player2") or "TBD")
     title = f"{match.get('round', 'Match')} · {match.get('match_id', '')}"
     description = (
-        f"## {match.get('player1', 'TBD')}  **vs**  {match.get('player2', 'TBD')}\n"
+        f"## {player_one}  **vs**  {player_two}\n"
         f"Best of {match.get('best_of', 3)}"
     )
     embed = discord.Embed(
@@ -92,6 +94,14 @@ def tournament_match_embed(match: dict[str, Any], bracket_url: str = "") -> disc
     embed.add_field(name="Players", value=f"{match.get('player1')}: **{ready_one}**\n{match.get('player2')}: **{ready_two}**", inline=True)
     embed.add_field(name="Series", value=str(match.get("series_score") or "0-0"), inline=True)
     embed.add_field(name="Status", value=str(match.get("status") or "Unknown"), inline=False)
+    embed.add_field(
+        name="Party host",
+        value=(
+            f"**{player_one}** is de bovenste/linker speler en maakt de GeoGuessr-party aan. "
+            "Deze speler stuurt de partylink hier in; de tegenstander joint via die link."
+        ),
+        inline=False,
+    )
     if highlighted:
         permission = "Released by admin" if match.get("admin_released") else "Waiting for admin start permission"
         embed.add_field(name="Featured broadcast match", value=permission, inline=False)
@@ -99,6 +109,8 @@ def tournament_match_embed(match: dict[str, Any], bracket_url: str = "") -> disc
         embed.add_field(name="Party", value=f"[Open GeoGuessr party]({match['party_url']})", inline=False)
     if match.get("stream_url"):
         embed.add_field(name="Broadcast", value=f"[Watch the stream]({match['stream_url']})", inline=False)
+    if rules_url:
+        embed.add_field(name="Reglement", value=f"[Lees het volledige toernooireglement]({rules_url})", inline=False)
     embed.set_footer(text="The Google Sheet bracket is the official tournament record.")
     return embed
 
@@ -108,7 +120,10 @@ def tournament_bracket_embed(payload: dict[str, Any]) -> discord.Embed:
     matches = sorted(payload.get("matches") or [], key=lambda item: int(item.get("order") or 0))
     title = str(config.get("Tournament Name") or "GeoNederland Tournament")
     bracket_url = str(config.get("Public Bracket URL") or "")
+    rules_url = str(config.get("Rules URL") or "")
     embed = discord.Embed(title=title, color=0x01397A, url=bracket_url or None)
+    if rules_url:
+        embed.description = f"[Lees het volledige toernooireglement]({rules_url})"
     current_round = None
     lines: list[str] = []
     fields: list[tuple[str, str]] = []
@@ -131,6 +146,24 @@ def tournament_bracket_embed(payload: dict[str, Any]) -> discord.Embed:
         embed.add_field(name=name, value=value[:1024], inline=False)
     embed.set_footer(text="📺 Highlighted match · Results update from the official Sheet")
     return embed
+
+
+def tournament_rules_embed(payload: dict[str, Any]) -> discord.Embed:
+    config = payload.get("config") or {}
+    title = str(config.get("Tournament Name") or "GeoNederland Tournament")
+    rules_url = str(config.get("Rules URL") or "").strip()
+    if not rules_url:
+        return discord.Embed(
+            title=f"{title} · Reglement",
+            description="Er is voor dit toernooi nog geen openbare reglementlink ingesteld.",
+            color=0xF47806,
+        )
+    return discord.Embed(
+        title=f"{title} · Reglement",
+        description=f"[Open het volledige toernooireglement]({rules_url})",
+        color=0x01397A,
+        url=rules_url,
+    )
 
 
 def tournament_registration_embed(player: dict[str, Any], action: str) -> discord.Embed:
