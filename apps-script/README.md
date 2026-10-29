@@ -40,11 +40,17 @@ names are rejected.
 bracket generation. `/unregister` keeps the audit trail but changes the player to
 `Withdrawn` instead of deleting the row.
 
-## Practice tournament
+## Manual seeding and bracket generation
 
-Add exactly eight rows to `Tournament Players`, including seed, Discord username
-(or an exact user ID) and a checked `Checked In` box. Then run **Generate 8-player practice
-bracket**. The generated bracket uses 1–8, 4–5, 2–7 and 3–6 quarterfinal pairings.
+Enter a manual number in the `Seed` column for every checked-in player. Seeds
+must be unique and consecutive from `1` through the number of eligible players.
+Use **Tournament Control → Validate player seeding** to check the list, followed
+by **Generate bracket**. Missing, duplicate, invalid or skipped seeds block
+generation with a clear error instead of silently changing the placements.
+
+Before any bracket has been generated, every Public Sheet shows a complete empty
+32-player bracket. Once generated, it switches to the actual configured bracket
+size and places players according to the manual seeds.
 
 Party and result links arrive through Discord. Result links remain pending until
 an administrator confirms the winner. This is intentional for the rehearsal;

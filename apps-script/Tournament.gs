@@ -13,6 +13,7 @@ function onOpen() {
     .addItem("Switch active tournament", "switchActiveTournament")
     .addItem("Archive active tournament", "archiveActiveTournament")
     .addSeparator()
+    .addItem("Validate player seeding", "validateTournamentSeeding")
     .addItem("Generate bracket", "generateTournamentBracket")
     .addItem("Sync Public bracket", "syncTournamentPublicSpreadsheet")
     .addSeparator()
@@ -185,7 +186,7 @@ function archiveActiveTournament() {
 function tournamentRenderPublicBracket_(sheet, config, matches) {
   const sorted = matches.slice().sort((a, b) => a.order - b.order);
   if (!sorted.length) {
-    [["Quarterfinal", 4], ["Semifinal", 2], ["Final", 1]].forEach(([round, count]) => {
+    [["Round of 32", 16], ["Round of 16", 8], ["Quarterfinal", 4], ["Semifinal", 2], ["Final", 1]].forEach(([round, count]) => {
       for (let index = 0; index < count; index++) sorted.push({
         round, order: sorted.length + 1, match_id: "TBD", player1: "TBD", player2: "TBD",
         series_score: "0-0", status: "Waiting for players", highlighted: false, winner: "",
@@ -433,13 +434,55 @@ function generatePracticeTournament() {
   generateTournamentBracket();
 }
 
+function validateTournamentSeeding() {
+  setupTournamentSystem();
+  const players = tournamentValidateSeeding_(tournamentCheckedInPlayers_());
+  SpreadsheetApp.getUi().alert(
+    "Player seeding valid",
+    players.length + " checked-in players have unique consecutive seeds 1–" + players.length + ".",
+    SpreadsheetApp.getUi().ButtonSet.OK,
+  );
+  return players;
+}
+
+function tournamentCheckedInPlayers_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
+  return tournamentRowsForActive_(sheet).filter(
+    (row) => tournamentBool_(row["Checked In"]) && String(row.Status || "").toLowerCase() !== "withdrawn",
+  );
+}
+
+function tournamentValidateSeeding_(players) {
+  if (players.length < 2) throw Error("At least two checked-in players are required.");
+  if (players.length > 64) throw Error("A bracket supports at most 64 checked-in players.");
+  const seen = {}, problems = [];
+  players.forEach((player) => {
+    const name = String(player.Player || "Unknown"), seed = Number(player.Seed);
+    if (!Number.isInteger(seed) || seed < 1 || seed > 64) {
+      problems.push(name + ": missing or invalid seed");
+    } else if (seen[seed]) {
+      problems.push(name + ": seed " + seed + " is already used by " + seen[seed]);
+    } else {
+      seen[seed] = name;
+    }
+  });
+  const orderedSeeds = Object.keys(seen).map(Number).sort((a, b) => a - b);
+  const missing = Array.from({length: players.length}, (_, index) => index + 1).filter((seed) => !seen[seed]);
+  const outside = orderedSeeds.filter((seed) => seed > players.length);
+  if (missing.length || outside.length) {
+    problems.push(
+      "Use consecutive seeds 1–" + players.length + ". Missing: " + (missing.join(", ") || "none") +
+      "; outside range: " + (outside.join(", ") || "none"),
+    );
+  }
+  if (problems.length) throw Error("Fix Tournament Players seeding:\n\n" + problems.join("\n"));
+  return players.slice().sort((a, b) => Number(a.Seed) - Number(b.Seed));
+}
+
 function generateTournamentBracket() {
   setupTournamentSystem();
-  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_(), playersSheet = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
-  const players = tournamentRowsForActive_(playersSheet)
-    .filter((row) => tournamentBool_(row["Checked In"]) && String(row.Status || "").toLowerCase() !== "withdrawn")
-    .sort((a, b) => Number(a.Seed || 999) - Number(b.Seed || 999));
-  if (players.length < 2) throw Error("At least two checked-in players are required.");
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_();
+  const players = tournamentValidateSeeding_(tournamentCheckedInPlayers_());
   const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
   if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " checked-in players.");
   const configuredSize = Number(tournament["Bracket Size"] || 0);
@@ -460,7 +503,7 @@ function generateTournamentBracket() {
   const config = tournamentConfig_(), bestOf = Number(tournament["Default Best Of"] || config["Default Best Of"] || 3);
   const presets = [tournament["Preset 1"] || config["Preset 1"] || "", tournament["Preset 2"] || config["Preset 2"] || "", tournament["Preset 3"] || config["Preset 3"] || ""];
   const seeded = {};
-  players.forEach((player, index) => seeded[Number(player.Seed || index + 1)] = String(player.Player));
+  players.forEach((player) => seeded[Number(player.Seed)] = String(player.Player));
   const seedOrder = tournamentSeedOrder_(bracketSize), rounds = Math.log(bracketSize) / Math.log(2), rows = [];
   let order = 1, previousCount = bracketSize / 2;
   for (let matchIndex = 0; matchIndex < previousCount; matchIndex++) {
@@ -529,6 +572,13 @@ function tournamentInitSheet_(ss, name, headers) {
 
 function tournamentValidation_(ss) {
   const players = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), matches = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  players.getRange("A2:A").setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireNumberBetween(1, 64)
+      .setAllowInvalid(false)
+      .setHelpText("Enter a unique manual seed from 1 to 64.")
+      .build(),
+  );
   players.getRange("G2:G").setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["Registered", "Checked In", "Withdrawn", "Disqualified"], true).build());
   players.getRange("H2:H").insertCheckboxes();
   matches.getRange("J2:M").insertCheckboxes();
