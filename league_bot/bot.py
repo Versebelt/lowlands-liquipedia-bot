@@ -31,48 +31,56 @@ YELLOW = 0xEFAC1F
 CHARCOAL = 0x111111
 LINK_PREFIX = "LLBOT_LINK_V1:"
 COMMAND_PAGES = (
-    (
-        ("Getting started", (
+    ("Start & competitie", (
+        ("Aan de slag", (
             ("/commands", "!commands", "Open this overview"),
             ("/ping", "!ping", "Check bot status and latency"),
         )),
-        ("Your profile", (
+        ("Jouw profiel", (
             ("/linkplayer name", "!linkplayer <name>", "Link Discord to your league player"),
             ("/whoami", "!whoami", "Open your personal dashboard"),
             ("/player name", "!player <name>", "Quick player overview"),
             ("/stats name", "!stats <name>", "Detailed player card and form"),
-            ("/compare player_one player_two", "!compare <name 1> | <name 2>", "Compare two players"),
         )),
-        ("League essentials", (
+        ("Competitie", (
             ("/standings", "!standings", "Browse the complete standings"),
             ("/week number", "!week <1-10>", "Seeds, status and deadline"),
             ("/cutoff", "!cutoff", "Current playoff qualification line"),
+        )),
+    )),
+    ("Statistieken", (
+        ("Ranglijsten", (
             ("/mode mode", "!mode <Moving|NM|NMPZ>", "Mode-specific top five"),
             ("/country country", "!country <NL|BE|LU>", "Country leaderboard"),
-        )),
-    ),
-    (
-        ("Stories & statistics", (
             ("/form", "!form", "Strongest recent form"),
             ("/movers", "!movers", "Weekly rises and falls"),
             ("/battle", "!battle", "Closest playoff-cutoff battle"),
             ("/nations", "!nations", "Benelux Nations Cup"),
+        )),
+        ("Verhalen & records", (
             ("/recap", "!recap", "Latest weekly recap"),
             ("/achievements", "!achievements", "Live season awards"),
             ("/milestones", "!milestones", "Records and milestones"),
         )),
-        ("Matchups", (
+        ("Vergelijken", (
+            ("/compare player_one player_two", "!compare <name 1> | <name 2>", "Compare two players"),
             ("/predict player_one player_two", "!predict <name 1> | <name 2>", "Form-based prediction"),
             ("/randommatch", "!randommatch", "Generate a random matchup"),
         )),
-        ("Tournament", (
+    )),
+    ("Toernooien", (
+        ("Deelnemers", (
             ("/inschrijven · /register", "!inschrijven · !register", "Inschrijven voor het toernooi"),
             ("/inchecken · /checkin", "!inchecken · !checkin", "Aanwezigheid bevestigen"),
             ("/uitschrijven · /unregister", "!uitschrijven · !unregister", "Inschrijving intrekken"),
+        )),
+        ("Wedstrijden", (
             ("/mijnwedstrijd · /mymatch", "!mijnwedstrijd · !mymatch", "Je actieve wedstrijd openen"),
             ("/schema · /bracket", "!schema · !bracket", "Het actuele toernooischema tonen"),
         )),
-        ("Administrator", (
+    )),
+    ("Beheer", (
+        ("Herinneringen", (
             ("/adminconfig", "!adminconfig", "Show reminder configuration"),
             ("/setupreminders #channel @role", "!setupreminders #channel @role", "Configure channel and role"),
             ("/setannouncement #channel", "!setannouncement #channel", "Change announcement channel"),
@@ -80,7 +88,12 @@ COMMAND_PAGES = (
             ("/reminders enabled", "!reminders <on|off>", "Pause or resume reminders"),
             ("/testreminder", "!testreminder", "Send a mention-free test"),
         )),
-    ),
+        ("Toernooibeheer", (
+            ("/wedstrijdvrijgeven", "!wedstrijdvrijgeven", "Uitgelichte wedstrijd laten starten"),
+            ("/wedstrijduitlichten", "!wedstrijduitlichten", "Broadcastwedstrijd instellen"),
+            ("/uitslagbevestigen", "!uitslagbevestigen", "Uitslag bevestigen en winnaar doorplaatsen"),
+        )),
+    )),
 )
 ADMIN_COMMANDS = (
     ("/adminconfig", "!adminconfig", "Show the active reminder configuration"),
@@ -387,46 +400,43 @@ def week_embed(number: int, rows: list[dict[str, str]], page_url: str) -> discor
 
 def commands_embed(page: int = 0) -> discord.Embed:
     page = max(0, min(page, len(COMMAND_PAGES) - 1))
+    page_title, sections = COMMAND_PAGES[page]
     embed = discord.Embed(
-        title=f"Lowlands League commands · {page + 1}/{len(COMMAND_PAGES)}",
-        description="Every command works with both `/` and `!`.",
+        title=f"GeoNederland bot · {page_title}",
+        description="Kies hieronder een categorie. Commando's werken met `/` en `!`; Engelse tournamentaliassen blijven ook beschikbaar.",
         color=BLUE,
         url=PUBLIC_URL,
     )
-    for title, commands in COMMAND_PAGES[page]:
+    for title, commands in sections:
         embed.add_field(
             name=title,
             value="\n".join(
-                f"`{slash}` · `{prefix}` — {description}"
-                for slash, prefix, description in commands
+                f"`{slash}` — {description}"
+                for slash, _prefix, description in commands
             ),
             inline=False,
         )
-    embed.set_footer(text=f"Page {page + 1}/{len(COMMAND_PAGES)} · Live data from the public league sheet")
+    embed.set_footer(text=f"Categorie {page + 1}/{len(COMMAND_PAGES)} · Alleen beheerders kunnen beheercommando's uitvoeren")
     return embed
+
+
+class CommandCategorySelect(discord.ui.Select):
+    def __init__(self, page: int = 0) -> None:
+        options = [
+            discord.SelectOption(label=title, value=str(index), default=index == page)
+            for index, (title, _sections) in enumerate(COMMAND_PAGES)
+        ]
+        super().__init__(placeholder="Kies een commandocategorie", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        page = int(self.values[0])
+        await interaction.response.edit_message(embed=commands_embed(page), view=CommandsView(page))
 
 
 class CommandsView(discord.ui.View):
     def __init__(self, page: int = 0) -> None:
         super().__init__(timeout=300)
-        self.page = page
-        self.update_buttons()
-
-    def update_buttons(self) -> None:
-        self.previous.disabled = self.page == 0
-        self.next.disabled = self.page == len(COMMAND_PAGES) - 1
-
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
-    async def previous(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        self.page = max(0, self.page - 1)
-        self.update_buttons()
-        await interaction.response.edit_message(embed=commands_embed(self.page), view=self)
-
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
-    async def next(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        self.page = min(len(COMMAND_PAGES) - 1, self.page + 1)
-        self.update_buttons()
-        await interaction.response.edit_message(embed=commands_embed(self.page), view=self)
+        self.add_item(CommandCategorySelect(page))
 
 
 def admin_config_embed(config: AdminConfig) -> discord.Embed:
