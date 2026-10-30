@@ -258,7 +258,8 @@ class LiquipediaClient:
             raise PublishError(
                 "Safety stop: the existing page is not marked as managed by this publisher."
             )
-        if current_text == self.config.wikicode:
+        # MediaWiki strips trailing whitespace on save, so compare without it.
+        if current_text.rstrip() == self.config.wikicode.rstrip():
             return {"result": "NoChange", "oldrevid": revision.get("revid")}
 
         payload: dict[str, str] = {

@@ -33,6 +33,22 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
         ensure = SOURCE.split("function tournamentEnsureLiquipediaBracketIds_", 1)[1].split("\n}", 1)[0]
         self.assertIn("tournamentValidLiquipediaBracketId_", ensure)
 
+    def test_status_changes_never_roll_back_a_started_match(self):
+        for name in ("tournamentSetReady_", "tournamentRelease_", "tournamentHighlight_", "tournamentResolve_"):
+            body = SOURCE.split(f"function {name}(", 1)[1].split("\n}", 1)[0]
+            self.assertIn("tournamentBeforeStart_", body, name)
+        for name in ("tournamentSetParty_", "tournamentSubmitResult_"):
+            body = SOURCE.split(f"function {name}(", 1)[1].split("\n}", 1)[0]
+            self.assertIn("tournamentClosed_(match)", body, name)
+
+    def test_byes_advance_when_the_bracket_is_generated(self):
+        generate = SOURCE.split("function generateTournamentBracket(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("tournamentAdvanceByes_(rows)", generate)
+
+    def test_public_schedule_shows_amsterdam_time(self):
+        self.assertIn('"Europe/Amsterdam"', SOURCE)
+        self.assertIn("tournamentAmsterdamTime_(m.scheduled_at)", SOURCE)
+
     def test_avatar_cache_and_batching_are_enabled(self):
         self.assertIn("UrlFetchApp.fetchAll", SOURCE)
         self.assertIn("CacheService.getScriptCache", SOURCE)

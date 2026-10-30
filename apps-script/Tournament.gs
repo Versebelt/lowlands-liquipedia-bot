@@ -375,9 +375,9 @@ function tournamentRenderPublicSchedule_(sheet, config, matches) {
   sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
   sheet.getRange("A1:G1").merge().setValue("Tournament schedule").setBackground("#00182f").setFontColor("#ffffff").setFontSize(18).setFontWeight("bold");
   sheet.getRange("A2:G2").merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament")).setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold");
-  const headers = ["Scheduled", "Match", "Round", "Players", "Status", "Featured", "Stream"];
+  const headers = ["Scheduled (Amsterdam)", "Match", "Round", "Players", "Status", "Featured", "Stream"];
   sheet.getRange(3, 1, 1, headers.length).setValues([headers]).setBackground("#00182f").setFontColor("#ffffff").setFontWeight("bold");
-  const rows = matches.filter((m) => m.scheduled_at).sort((a, b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at))).map((m) => [m.scheduled_at, m.match_id, m.round, m.player1 + " vs " + m.player2, m.status, m.highlighted ? "Yes" : "", m.stream_url || config["Stream URL"] || ""]);
+  const rows = matches.filter((m) => m.scheduled_at).sort((a, b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at))).map((m) => [tournamentAmsterdamTime_(m.scheduled_at), m.match_id, m.round, m.player1 + " vs " + m.player2, m.status, m.highlighted ? "Yes" : "", m.stream_url || config["Stream URL"] || ""]);
   if (rows.length) sheet.getRange(4, 1, rows.length, headers.length).setValues(rows);
   [170, 110, 130, 280, 170, 100, 260].forEach((width, index) => sheet.setColumnWidth(index + 1, width));
 }
@@ -644,12 +644,31 @@ function generateTournamentBracket() {
       }));
     }
   }
+  tournamentAdvanceByes_(rows);
   matchesSheet.getRange(matchesSheet.getLastRow() + 1, 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
   tournamentFormat_(ss);
   tournamentLog_("sheet", "generate_bracket", "", "Generated " + bracketSize + "-player bracket");
   const publicId = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
   if (publicId) syncTournamentPublicSpreadsheet();
   ss.toast(bracketSize + "-player bracket generated.", "GeoNederland Tournament", 6);
+}
+
+// A player drawn against a BYE wins that match without playing. Rows are in
+// round order, so walkovers that create new BYE pairings resolve in one pass.
+function tournamentAdvanceByes_(rows) {
+  const column = (name) => TOURNAMENT.HEADERS.MATCHES.indexOf(name);
+  const p1 = column("Player 1"), p2 = column("Player 2"), status = column("Status"), winner = column("Winner");
+  const next = column("Next Match ID"), slot = column("Next Slot"), id = column("Match ID");
+  rows.forEach((row) => {
+    if (row[p1] === "TBD" || row[p2] === "TBD" || (row[p1] !== "BYE" && row[p2] !== "BYE")) return;
+    row[winner] = row[p1] === "BYE" ? row[p2] : row[p1];
+    row[status] = "Complete";
+    const target = rows.find((candidate) => candidate[id] === row[next]);
+    if (!target) return;
+    target[Number(row[slot]) === 2 ? p2 : p1] = row[winner];
+    const filled = target[p1] !== "TBD" && target[p2] !== "TBD";
+    target[status] = filled ? "Waiting for players" : "Waiting for opponent";
+  });
 }
 
 function tournamentSeedOrder_(size) {
@@ -701,6 +720,7 @@ function tournamentValidation_(ss) {
   players.getRange("G2:G").setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(["Registered", "Checked In", "Withdrawn", "Disqualified"], true).build());
   players.getRange("H2:H").insertCheckboxes();
   matches.getRange("J2:M").insertCheckboxes();
+  matches.getRange("T2:T").setNumberFormat("yyyy-mm-dd hh:mm");
   matches.getRange("N2:N").setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList([
     "Waiting for opponent", "Waiting for players", "Waiting for broadcast", "Ready to start", "Live", "Pending result", "Complete", "On hold", "Disqualified",
   ], true).build());
@@ -938,7 +958,8 @@ function tournamentAvatarMap_(players) {
         avatar = "";
       }
       avatars[item.player] = avatar;
-      cache.put(item.key, avatar || "__none__", 21600);
+      // Missing avatars are retried sooner, so a new profile picture shows up quickly.
+      cache.put(item.key, avatar || "__none__", avatar ? 21600 : 1800);
     });
   }
   return avatars;
@@ -956,7 +977,22 @@ function tournamentGeoGuessrAvatarUrl_(profile) {
 }
 
 function tournamentDateIso_(value) {
-  return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : String(value || "");
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+  // Dates typed into a plain-text cell, e.g. "2026-12-12 19:00", are Amsterdam time.
+  const text = String(value || "").trim(), match = text.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2})$/);
+  if (match) {
+    try {
+      return Utilities.parseDate(match[1] + " " + match[2], "Europe/Amsterdam", "yyyy-MM-dd HH:mm").toISOString();
+    } catch (error) {
+      return "";
+    }
+  }
+  return /^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/.test(text) ? text : "";
+}
+
+function tournamentAmsterdamTime_(iso) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : Utilities.formatDate(date, "Europe/Amsterdam", "EEE d MMM yyyy HH:mm");
 }
 
 function tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayName) {
@@ -1094,17 +1130,31 @@ function tournamentWriteMatch_(match, changes) {
   return tournamentPublicMatch_(match);
 }
 
+// Statuses before the party exists. Ready, release and highlight may only
+// recalculate the status in this phase; later phases are never rolled back.
+const TOURNAMENT_PRE_START_STATUSES = ["", "Waiting for opponent", "Waiting for players", "Waiting for broadcast", "Ready to start"];
+
+function tournamentBeforeStart_(match) {
+  return TOURNAMENT_PRE_START_STATUSES.includes(String(match.Status || ""));
+}
+
+function tournamentClosed_(match) {
+  return ["Complete", "Disqualified"].includes(String(match.Status));
+}
+
 function tournamentSetReady_(match, discordUserId, discordName, discordDisplayName) {
-  if (["Complete", "Disqualified"].includes(String(match.Status))) throw Error("This match is already closed.");
+  if (tournamentClosed_(match)) throw Error("This match is already closed.");
   const player = tournamentRequireParticipant_(match, discordUserId, discordName, discordDisplayName), field = player.Player === match["Player 1"] ? "Player 1 Ready" : "Player 2 Ready";
   match[field] = true;
   const both = tournamentBool_(match["Player 1 Ready"]) && tournamentBool_(match["Player 2 Ready"]);
-  const status = both ? (tournamentBool_(match.Highlighted) && !tournamentBool_(match["Admin Released"]) ? "Waiting for broadcast" : "Ready to start") : "Waiting for players";
+  const status = !tournamentBeforeStart_(match) ? String(match.Status)
+    : both ? (tournamentBool_(match.Highlighted) && !tournamentBool_(match["Admin Released"]) ? "Waiting for broadcast" : "Ready to start") : "Waiting for players";
   tournamentLog_(discordUserId, "ready", match["Match ID"], player.Player);
   return tournamentWriteMatch_(match, {[field]: true, Status: status});
 }
 
 function tournamentSetParty_(match, discordUserId, url, discordName, discordDisplayName) {
+  if (tournamentClosed_(match)) throw Error("This match is already closed.");
   const player = tournamentRequireParticipant_(match, discordUserId, discordName, discordDisplayName);
   if (String(player.Player) !== String(match["Player 1"])) {
     throw Error("Only " + match["Player 1"] + " (the upper/left player) can create the party and submit its link.");
@@ -1118,6 +1168,7 @@ function tournamentSetParty_(match, discordUserId, url, discordName, discordDisp
 }
 
 function tournamentSubmitResult_(match, discordUserId, url, discordName, discordDisplayName) {
+  if (tournamentClosed_(match)) throw Error("This match is already closed.");
   tournamentRequireParticipant_(match, discordUserId, discordName, discordDisplayName);
   const value = String(url || "").trim();
   if (!/^https:\/\/(www\.)?geoguessr\.com\//i.test(value)) throw Error("Enter a valid GeoGuessr result link.");
@@ -1134,13 +1185,14 @@ function tournamentSubmitResult_(match, discordUserId, url, discordName, discord
 function tournamentRelease_(match, actor) {
   const both = tournamentBool_(match["Player 1 Ready"]) && tournamentBool_(match["Player 2 Ready"]);
   tournamentLog_(actor, "release", match["Match ID"], "Admin start permission granted");
-  return tournamentWriteMatch_(match, {"Admin Released": true, Status: both ? "Ready to start" : "Waiting for players"});
+  const status = tournamentBeforeStart_(match) ? (both ? "Ready to start" : "Waiting for players") : String(match.Status);
+  return tournamentWriteMatch_(match, {"Admin Released": true, Status: status});
 }
 
 function tournamentHighlight_(match, actor, highlighted) {
   const enabled = tournamentBool_(highlighted), both = tournamentBool_(match["Player 1 Ready"]) && tournamentBool_(match["Player 2 Ready"]);
   let status = String(match.Status || "Waiting for players");
-  if (both && !match["Party URL"]) status = enabled && !tournamentBool_(match["Admin Released"]) ? "Waiting for broadcast" : "Ready to start";
+  if (both && !match["Party URL"] && tournamentBeforeStart_(match)) status = enabled && !tournamentBool_(match["Admin Released"]) ? "Waiting for broadcast" : "Ready to start";
   tournamentLog_(actor, "highlight", match["Match ID"], enabled ? "Enabled" : "Disabled");
   return tournamentWriteMatch_(match, {Highlighted: enabled, Status: status});
 }
@@ -1153,7 +1205,8 @@ function tournamentResolve_(match, actor, winner, score) {
     const next = tournamentFindMatch_(match["Next Match ID"]), slot = Number(match["Next Slot"] || 1);
     const field = slot === 2 ? "Player 2" : "Player 1";
     const other = slot === 2 ? next["Player 1"] : next["Player 2"];
-    const nextStatus = other && other !== "TBD" ? "Waiting for players" : "Waiting for opponent";
+    const nextStatus = !tournamentBeforeStart_(next) ? String(next.Status)
+      : (other && other !== "TBD" ? "Waiting for players" : "Waiting for opponent");
     tournamentWriteMatch_(next, {[field]: name, Status: nextStatus});
   }
   tournamentLog_(actor, "resolve", match["Match ID"], name + " " + String(score || ""));

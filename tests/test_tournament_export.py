@@ -91,6 +91,36 @@ class TournamentExportTests(unittest.TestCase):
     def test_escapes_wikicode_control_characters(self):
         self.assertEqual(wiki_text("A|B{{C}}"), "A-B(C)")
 
+    def test_escapes_links_comments_and_named_parameters(self):
+        escaped = wiki_text("a=b <!-- [[x]] ~~~~ __NOTOC__ &")
+        for unsafe in ("=", "<", "[[", "~~~", "__"):
+            self.assertNotIn(unsafe, escaped)
+        self.assertIn("&amp;", escaped)
+
+    def test_bracket_slot_comes_from_match_id_not_row_order(self):
+        matches = [dict(match) for match in TOURNAMENT["matches"]]
+        for match, match_id in zip(matches, ["t-R1-M2", "t-R1-M1", "t-R2-M1"]):
+            match["match_id"] = match_id
+        text = build_wikicode(dict(TOURNAMENT, matches=matches))
+        self.assertIn("|R1M2={{Match\n    |opponent1={{SoloOpponent|Trekk", text)
+        self.assertIn("|R1M1={{Match\n    |opponent1={{SoloOpponent|Matedu", text)
+
+    def test_rejects_duplicate_or_impossible_slots(self):
+        matches = [dict(match, match_id="t-R1-M1") for match in TOURNAMENT["matches"][:2]]
+        with self.assertRaisesRegex(TournamentExportError, "share bracket slot"):
+            build_wikicode(dict(TOURNAMENT, matches=matches))
+        with self.assertRaisesRegex(TournamentExportError, "does not fit"):
+            build_wikicode(dict(TOURNAMENT, matches=[dict(TOURNAMENT["matches"][0], match_id="t-R1-M3")]))
+
+    def test_bye_is_a_walkover_for_the_other_player(self):
+        bye = dict(TOURNAMENT["matches"][0], player2="BYE", series_score="0-0")
+        text = build_wikicode(dict(TOURNAMENT, matches=[bye]))
+        self.assertIn("{{LiteralOpponent|BYE}}", text)
+        self.assertIn("|winner=1", text)
+
+    def test_no_displaytitle_on_test_page(self):
+        self.assertNotIn("DISPLAYTITLE", build_wikicode(TOURNAMENT))
+
     def test_formats_amsterdam_standard_time(self):
         self.assertEqual(match_date("2026-12-12T18:00:00Z"), "2026-12-12 19:00 {{Abbr/CET}}")
 

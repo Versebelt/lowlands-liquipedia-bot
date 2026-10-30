@@ -71,7 +71,12 @@ def fetch_tournament(source: TournamentSource) -> dict[str, Any]:
         response.raise_for_status()
         payload = response.json()
     except (requests.RequestException, requests.JSONDecodeError) as exc:
-        raise TournamentExportError(f"Could not retrieve tournament data: {exc}") from exc
+        # requests messages contain the full URL, including the secret.
+        response = getattr(exc, "response", None)
+        status = f" HTTP {response.status_code}" if response is not None else ""
+        raise TournamentExportError(
+            f"Could not retrieve tournament data ({type(exc).__name__}{status})."
+        ) from None
     if not payload.get("ok"):
         raise TournamentExportError(str(payload.get("error") or "Tournament API rejected the request."))
     tournament = payload.get("tournament")
@@ -80,12 +85,21 @@ def fetch_tournament(source: TournamentSource) -> dict[str, Any]:
     return tournament
 
 
+# Characters that would otherwise start a link, comment, tag, signature or a
+# named template parameter. Single braces are escaped after "{{"/"}}" become
+# parentheses, so a name can never open or close a template.
+WIKI_ENTITIES = {
+    "=": "&#61;", "<": "&lt;", ">": "&gt;", "[": "&#91;", "]": "&#93;",
+    "{": "&#123;", "}": "&#125;", "~": "&#126;",
+}
+
+
 def wiki_text(value: Any, *, fallback: str = "TBD", limit: int = 100) -> str:
-    text = str(value or "").strip()
-    text = re.sub(r"[\r\n\t]+", " ", text)
+    text = re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
     text = text.replace("{{", "(").replace("}}", ")").replace("|", "-")
-    text = re.sub(r"\s+", " ", text).strip()
-    return (text[:limit] or fallback)
+    text = text.replace("&", "&amp;").replace("__", "_&#95;")
+    text = "".join(WIKI_ENTITIES.get(character, character) for character in text)
+    return text or fallback
 
 
 def country_code(value: Any) -> str:
@@ -144,6 +158,26 @@ def participant_lines(tournament: dict[str, Any]) -> list[str]:
     return lines
 
 
+MATCH_POSITION = re.compile(r"-R(\d+)-M(\d+)$")
+
+
+def match_position(match: dict[str, Any], round_index: int, match_index: int, size: int) -> tuple[int, int]:
+    """Bracket slot from the generated match ID, so sheet row order cannot move a match."""
+    found = MATCH_POSITION.search(str(match.get("match_id") or ""))
+    if not found:
+        return round_index, match_index
+    round_number, match_number = int(found.group(1)), int(found.group(2))
+    if not 1 <= round_number < size.bit_length() or not 1 <= match_number <= size >> round_number:
+        raise TournamentExportError(f"Match {wiki_text(match.get('match_id'))} does not fit a {size}-player bracket.")
+    return round_number, match_number
+
+
+def opponent(name: str, flag: str, score: str) -> str:
+    if name == "BYE":
+        return "{{LiteralOpponent|BYE}}"
+    return f"{{{{SoloOpponent|{name}|flag={flag}|score={score}}}}}"
+
+
 def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
     player_countries = {
         wiki_text(player.get("player")): country_code(player.get("country"))
@@ -168,10 +202,15 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
 
     bracket_id = str(tournament["liquipedia_bracket_id"])
     lines = ["==Results==", f"{{{{Bracket|Bracket/{size}|id={bracket_id}"]
+    used: set[tuple[int, int]] = set()
     for round_index, round_name in enumerate(rounds, start=1):
         lines.append("")
         lines.append(f"<!-- {round_name} -->")
         for match_index, match in enumerate(grouped[round_name], start=1):
+            position = match_position(match, round_index, match_index, size)
+            if position in used:
+                raise TournamentExportError(f"Two matches share bracket slot R{position[0]}M{position[1]}.")
+            used.add(position)
             player1 = wiki_text(match.get("player1"))
             player2 = wiki_text(match.get("player2"))
             score1, score2 = parse_score(match.get("series_score"))
@@ -181,12 +220,15 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
             date = match_date(match.get("scheduled_at"))
             flag1 = player_countries.get(player1, "")
             flag2 = player_countries.get(player2, "")
+            walkover = ""
+            if "BYE" in (player1, player2) and player1 != player2:
+                walkover = f" |winner={2 if player1 == 'BYE' else 1}"
             lines.extend(
                 [
-                    f"|R{round_index}M{match_index}={{{{Match",
-                    f"    |opponent1={{{{SoloOpponent|{player1}|flag={flag1}|score={score1}}}}}",
-                    f"    |opponent2={{{{SoloOpponent|{player2}|flag={flag2}|score={score2}}}}}",
-                    f"    |finished={'true' if finished else 'false'}" + (f" |date={date}" if date else ""),
+                    f"|R{position[0]}M{position[1]}={{{{Match",
+                    f"    |opponent1={opponent(player1, flag1, score1)}",
+                    f"    |opponent2={opponent(player2, flag2, score2)}",
+                    f"    |finished={'true' if finished else 'false'}" + walkover + (f" |date={date}" if date else ""),
                     "}}",
                 ]
             )
@@ -200,7 +242,6 @@ def build_wikicode(tournament: dict[str, Any]) -> str:
     lines = [
         TEST_MARKER,
         "<!-- Generated from the GeoNederland Tournament Admin sheet. -->",
-        f"{{{{DISPLAYTITLE:{name}}}}}",
         "",
         f"'''{name}''' is a GeoNederland tournament.",
         "",

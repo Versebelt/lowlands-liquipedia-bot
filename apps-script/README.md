@@ -17,7 +17,7 @@ logs are tagged with that ID and are never reset for the next event. The
 
 1. Open the new Admin spreadsheet.
 2. Choose **Extensions → Apps Script**.
-3. Replace the starter source with `Code.gs` and save.
+3. Replace the starter source with `Tournament.gs` and save.
 4. Reload the Admin spreadsheet and run **Tournament Control → Set up / repair Admin sheet**.
 5. Use **Tournament Control → Create new tournament** for every practice event,
    qualifier, MBO event or LCQ. This automatically creates its Public Sheet.
@@ -78,9 +78,22 @@ the stored link when they need to spectate the match.
 - The central tables retain every historical row and can be filtered by
   `Tournament ID`.
 
-Brackets support 8, 16, 32 and 64-player tournament limits. The actual bracket
-uses the smallest suitable power of two unless `Bracket Size` is explicitly
-overridden. Large brackets are rendered as two mirrored halves that converge on
+Brackets support 2, 4, 8, 16, 32 and 64 players. **Create new tournament** offers
+8, 16, 32 and 64 as registration limits; the actual bracket uses the smallest
+suitable power of two unless `Bracket Size` is explicitly overridden. Players
+drawn against a BYE advance automatically when the bracket is generated.
+
+Type `Scheduled At` as a date cell (`yyyy-mm-dd hh:mm`) or as text in that
+format; both are read as Europe/Amsterdam time, so set the spreadsheet time zone
+to Europe/Amsterdam under **File -> Settings**. The public Schedule tab shows
+Amsterdam time.
+
+A match status never moves backwards: once a party link is submitted, Ready,
+release and highlight no longer change the status, and closed matches reject
+party links and results.
+
+Liquipedia bracket IDs are exactly ten letters or digits. **Set up / repair Admin
+sheet** replaces any older ID that does not match. Large brackets are rendered as two mirrored halves that converge on
 the final in the centre. Brackets with up to eight players use the compact
 left-to-right layout; brackets with 16 or more players always work from both
 outer edges towards the centre.
