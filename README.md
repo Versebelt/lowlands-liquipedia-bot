@@ -226,3 +226,29 @@ Discord reading order. Player 1 creates the GeoGuessr party and submits its link
 after both players are ready. Player 2 joins through that link. Administrators
 and casters can use the stored party link for spectating. The API rejects party
 links submitted by Player 2; either participant may still submit a result link.
+
+### Tournament Liquipedia test export
+
+`.github/workflows/publish-tournament-test.yml` reads one tournament from the
+authenticated Tournament Apps Script API, validates that it is a 2, 4, 8, 16,
+32 or 64-player single-elimination bracket and generates native GeoGuessr
+Liquipedia wikicode. Participants use `ParticipantTable`; results use
+`Bracket/2` through `Bracket/64`, `Match` and `SoloOpponent`. Scores, flags,
+scheduled times and completed states come from the Tournament Admin data.
+
+The first stage can publish only to `User:DialloBOT/test`. It cannot edit a
+production tournament page. Run it manually from **Actions → Publish tournament
+test to Liquipedia**, enter the exact `Tournament ID`, then inspect both the page
+and the uploaded `tournament-wikicode.txt` artifact.
+
+In addition to the existing Liquipedia bot secrets, configure these GitHub
+Actions repository secrets:
+
+- `TOURNAMENT_API_URL`: the Apps Script `/exec` deployment URL.
+- `TOURNAMENT_API_SECRET`: the same 32+ character secret used by the Discord bot.
+
+Production tournament pages deliberately remain disabled until the test output
+has been approved. Enabling them later requires a separate production marker,
+an explicit page-title allowlist and managed-section adoption; never add a broad
+page prefix or arbitrary page-title input.
+

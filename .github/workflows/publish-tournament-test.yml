@@ -1,0 +1,68 @@
+name: Publish tournament test to Liquipedia
+run-name: Tournament test ${{ inputs.tournament_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tournament_id:
+        description: Tournament ID from the Tournament Admin sheet
+        required: true
+        default: practice-1
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: liquipedia-tournament-test
+  cancel-in-progress: false
+
+jobs:
+  publish-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Generate tournament wikicode
+        id: export
+        env:
+          TOURNAMENT_API_URL: ${{ secrets.TOURNAMENT_API_URL }}
+          TOURNAMENT_API_SECRET: ${{ secrets.TOURNAMENT_API_SECRET }}
+          TOURNAMENT_ID: ${{ inputs.tournament_id }}
+        run: python -m publisher.tournament_export
+
+      - name: Publish bot test page
+        env:
+          LIQUIPEDIA_BOT_USERNAME: ${{ secrets.LIQUIPEDIA_BOT_USERNAME }}
+          LIQUIPEDIA_BOT_PASSWORD: ${{ secrets.LIQUIPEDIA_BOT_PASSWORD }}
+          LIQUIPEDIA_CONTACT: ${{ secrets.LIQUIPEDIA_CONTACT }}
+          LIQUIPEDIA_ALLOWED_TITLES: User:DialloBOT/test
+          INPUT_PAGE_TITLE: User:DialloBOT/test
+          INPUT_CONTENT_B64: ${{ steps.export.outputs.content_b64 }}
+          INPUT_EDIT_SUMMARY: "GeoNederland tournament test: ${{ steps.export.outputs.tournament_name }}"
+          INPUT_ALLOW_UNMARKED_EXISTING: "false"
+          LIQUIPEDIA_RESULT_PATH: tournament-publish-result.json
+        run: python publisher/publish.py
+
+      - name: Upload generated preview and result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tournament-liquipedia-test-${{ inputs.tournament_id }}
+          path: |
+            tournament-wikicode.txt
+            tournament-publish-result.json
+          if-no-files-found: ignore
+          retention-days: 14
+
