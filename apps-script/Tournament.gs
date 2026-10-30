@@ -767,7 +767,7 @@ function doGet(e) {
     if (action === "health") return tournamentJson_({ok: true, service: "geonederland-tournament"});
     if (action === "bracket") return tournamentJson_({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()});
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
-    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_()});
+    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(), updated_at: tournamentWebsiteUpdatedAt_()});
     if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id)});
     throw Error("Unknown action: " + action);
   } catch (error) {
@@ -832,15 +832,17 @@ function tournamentWebsiteDetail_(tournamentId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const players = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), id)
     .filter((row) => !["Withdrawn", "Disqualified"].includes(String(row.Status)));
+  const avatars = tournamentAvatarMap_(players);
   const matches = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id)
-    .map(tournamentWebsiteMatch_).sort((a, b) => a.order - b.order);
+    .map((row) => tournamentWebsiteMatch_(row, avatars)).sort((a, b) => a.order - b.order);
   const final = matches.find((match) => match.round === "Final");
   return Object.assign(tournamentWebsiteSummary_(tournament, players.length, matches.length, final && final.winner), {
-    participants: players.map(tournamentWebsitePlayer_).sort((a, b) => a.seed - b.seed),
+    participants: players.map((row) => tournamentWebsitePlayer_(row, avatars)).sort((a, b) => a.seed - b.seed),
     matches,
     highlighted_matches: matches.filter((match) => match.highlighted),
     rounds: [...new Set(matches.map((match) => match.round).filter(Boolean))],
     liquipedia_bracket_id: String(tournament["Liquipedia Bracket ID"]),
+    updated_at: tournamentWebsiteUpdatedAt_(id),
   });
 }
 
@@ -859,14 +861,22 @@ function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
   };
 }
 
-function tournamentWebsitePlayer_(row) {
-  return {seed: Number(row.Seed || 0), player: String(row.Player || ""), country: String(row.Country || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3)};
+function tournamentWebsitePlayer_(row, avatars) {
+  const player = String(row.Player || "");
+  return {
+    seed: Number(row.Seed || 0), player,
+    country: String(row.Country || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3),
+    status: ["Registered", "Checked In"].includes(String(row.Status)) ? String(row.Status) : "Registered",
+    avatar_url: String((avatars || {})[player] || ""),
+  };
 }
 
-function tournamentWebsiteMatch_(row) {
+function tournamentWebsiteMatch_(row, avatars) {
+  const player1 = String(row["Player 1"] || "TBD"), player2 = String(row["Player 2"] || "TBD");
   return {
     match_id: String(row["Match ID"] || ""), round: String(row.Round || ""), order: Number(row["Bracket Order"] || 0),
-    player1: String(row["Player 1"] || "TBD"), player2: String(row["Player 2"] || "TBD"), best_of: Number(row["Best Of"] || 3),
+    player1, player2, player1_avatar_url: String((avatars || {})[player1] || ""),
+    player2_avatar_url: String((avatars || {})[player2] || ""), best_of: Number(row["Best Of"] || 3),
     highlighted: tournamentBool_(row.Highlighted), status: String(row.Status || ""),
     series_score: String(row["Series Score"] || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
     winner: String(row.Winner || ""), scheduled_at: tournamentDateIso_(row["Scheduled At"]),
@@ -877,6 +887,67 @@ function tournamentWebsiteMatch_(row) {
 function tournamentWebsiteUrl_(value) {
   const url = String(value || "").trim();
   return /^https:\/\/[a-z0-9.-]+(?:[\/:?#][^\s]*)?$/i.test(url) ? url.slice(0, 500) : "";
+}
+
+function tournamentWebsiteUpdatedAt_(tournamentId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), values = [];
+  [[TOURNAMENT.SHEETS.TOURNAMENTS, "Created At"], [TOURNAMENT.SHEETS.PLAYERS, "Updated At"], [TOURNAMENT.SHEETS.MATCHES, "Updated At"]]
+    .forEach(([sheetName, field]) => {
+      const sheet = ss.getSheetByName(sheetName), rows = tournamentId ? tournamentRowsFor_(sheet, tournamentId) : tournamentRows_(sheet);
+      rows.forEach((row) => {
+      if (row[field] instanceof Date) values.push(row[field]);
+      });
+    });
+  return values.length ? new Date(Math.max(...values.map((value) => value.getTime()))).toISOString() : "";
+}
+
+function tournamentAvatarMap_(players) {
+  const cache = CacheService.getScriptCache(), avatars = {}, missing = [];
+  (players || []).forEach((row) => {
+    const player = String(row.Player || ""), userId = String(row["GeoGuessr User ID"] || "").trim();
+    if (!player || !/^[A-Za-z0-9_-]{6,80}$/.test(userId)) return;
+    const key = "tournament-avatar-" + userId, cached = cache.get(key);
+    if (cached !== null) avatars[player] = cached === "__none__" ? "" : cached;
+    else missing.push({player, userId, key});
+  });
+  for (let offset = 0; offset < missing.length; offset += 20) {
+    const batch = missing.slice(offset, offset + 20);
+    let responses = [];
+    try {
+      responses = UrlFetchApp.fetchAll(batch.map((item) => ({
+        url: "https://www.geoguessr.com/api/v3/users/" + encodeURIComponent(item.userId),
+        method: "get", muteHttpExceptions: true,
+        headers: {"User-Agent": "GeoNederland-Tournament/1.0"},
+      })));
+    } catch (error) {
+      responses = [];
+    }
+    batch.forEach((item, index) => {
+      let avatar = "";
+      try {
+        const response = responses[index];
+        if (response && response.getResponseCode() >= 200 && response.getResponseCode() < 300) {
+          avatar = tournamentGeoGuessrAvatarUrl_(JSON.parse(response.getContentText()));
+        }
+      } catch (error) {
+        avatar = "";
+      }
+      avatars[item.player] = avatar;
+      cache.put(item.key, avatar || "__none__", 21600);
+    });
+  }
+  return avatars;
+}
+
+function tournamentGeoGuessrAvatarUrl_(profile) {
+  const data = profile || {}, image = String(
+    data.fullBodyPin || (data.avatar || {}).fullBodyPath || (data.pin || {}).url || data.customImage || "",
+  ).trim();
+  if (!image) return "";
+  if (/^https:\/\/(?:www\.)?geoguessr\.com\//i.test(image)) return image.slice(0, 1000);
+  const path = image.replace(/^\/+/, "");
+  if (!path || /[\s{}<>]/.test(path) || path.includes(":")) return "";
+  return "https://www.geoguessr.com/images/resize:fill:512:512/gravity:no:0:0/plain/" + path.slice(0, 800);
 }
 
 function tournamentDateIso_(value) {
