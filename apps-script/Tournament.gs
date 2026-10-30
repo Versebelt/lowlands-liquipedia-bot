@@ -42,6 +42,7 @@ const TOURNAMENT = {
       "Tournament ID", "Tournament Name", "Type", "Status", "Maximum Players", "Bracket Size",
       "Default Best Of", "Preset 1", "Preset 2", "Preset 3", "Public Spreadsheet ID",
       "Public Bracket URL", "Stream URL", "Created At", "Archived At", "Rules URL",
+      "Registration URL", "Start At", "End At", "Liquipedia Bracket ID",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -101,6 +102,7 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Rules URL", "", "Public link to the current tournament regulations");
   tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
   tournamentEnsureInitialTournament_();
+  tournamentEnsureLiquipediaBracketIds_();
   tournamentCleanGhostTournamentIds_();
   tournamentMigrateLegacyTournamentIds_();
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
@@ -147,7 +149,7 @@ function createTournament() {
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
-    publicSs.getId(), publicSs.getUrl(), "", new Date(), "", ""];
+    publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_()];
   SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS).appendRow(row);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
@@ -405,7 +407,28 @@ function tournamentEnsureInitialTournament_() {
     Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
     config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
     config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "", config["Rules URL"] || "",
+    "", "", "", tournamentNewLiquipediaBracketId_(),
   ]);
+}
+
+function tournamentNewLiquipediaBracketId_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  const used = new Set(tournamentRows_(sheet).map((row) => String(row["Liquipedia Bracket ID"] || "")));
+  const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let id = "";
+  do id = Array.from({length: 12}, () => characters[Math.floor(Math.random() * characters.length)]).join("");
+  while (used.has(id));
+  return id;
+}
+
+function tournamentEnsureLiquipediaBracketIds_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Liquipedia Bracket ID") + 1;
+  tournamentRows_(sheet).forEach((row) => {
+    if (!String(row["Liquipedia Bracket ID"] || "").trim()) {
+      sheet.getRange(row.__row, column).setValue(tournamentNewLiquipediaBracketId_());
+    }
+  });
 }
 
 function tournamentMigrateLegacyTournamentIds_() {
@@ -744,6 +767,8 @@ function doGet(e) {
     if (action === "health") return tournamentJson_({ok: true, service: "geonederland-tournament"});
     if (action === "bracket") return tournamentJson_({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()});
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
+    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_()});
+    if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id)});
     throw Error("Unknown action: " + action);
   } catch (error) {
     return tournamentJson_({ok: false, error: String(error.message || error)});
@@ -778,6 +803,80 @@ function tournamentPublicMatch_(row) {
     series_score: String(row["Series Score"] || "0-0"), winner: String(row.Winner || ""),
     scheduled_at: tournamentDateIso_(row["Scheduled At"]), stream_url: String(row["Stream URL"] || ""),
   };
+}
+
+/* Strict public allowlist shared by the website and Liquipedia exporter. */
+function tournamentWebsiteIndex_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return tournamentRows_(ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)).map((row) => {
+    const id = String(row["Tournament ID"] || "");
+    const players = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), id)
+      .filter((player) => !["Withdrawn", "Disqualified"].includes(String(player.Status)));
+    const matches = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id);
+    const final = matches.find((match) => String(match.Round) === "Final");
+    return tournamentWebsiteSummary_(row, players.length, matches.length, final && final.Winner);
+  });
+}
+
+function tournamentWebsiteDetail_(tournamentId) {
+  const id = String(tournamentId || "").trim();
+  if (!/^[a-z0-9-]{1,80}$/i.test(id)) throw Error("Invalid tournament ID.");
+  const tournament = tournamentById_(id);
+  if (!tournament) throw Error("Tournament not found.");
+  if (!String(tournament["Liquipedia Bracket ID"] || "").trim()) {
+    const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Liquipedia Bracket ID") + 1;
+    tournament["Liquipedia Bracket ID"] = tournamentNewLiquipediaBracketId_();
+    SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)
+      .getRange(tournament.__row, column).setValue(tournament["Liquipedia Bracket ID"]);
+  }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const players = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), id)
+    .filter((row) => !["Withdrawn", "Disqualified"].includes(String(row.Status)));
+  const matches = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id)
+    .map(tournamentWebsiteMatch_).sort((a, b) => a.order - b.order);
+  const final = matches.find((match) => match.round === "Final");
+  return Object.assign(tournamentWebsiteSummary_(tournament, players.length, matches.length, final && final.winner), {
+    participants: players.map(tournamentWebsitePlayer_).sort((a, b) => a.seed - b.seed),
+    matches,
+    highlighted_matches: matches.filter((match) => match.highlighted),
+    rounds: [...new Set(matches.map((match) => match.round).filter(Boolean))],
+    liquipedia_bracket_id: String(tournament["Liquipedia Bracket ID"]),
+  });
+}
+
+function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
+  const status = String(row.Status || "Setup"), phase = ["complete", "completed", "archived"].includes(status.toLowerCase())
+    ? "completed" : (["live", "in progress", "check-in", "checkin"].includes(status.toLowerCase()) ? "live" : "upcoming");
+  return {
+    id: String(row["Tournament ID"] || ""), name: String(row["Tournament Name"] || "GeoNederland Tournament"),
+    type: String(row.Type || "Single Elimination"), status, phase,
+    maximum_players: Number(row["Maximum Players"] || 0), bracket_size: Number(row["Bracket Size"] || 0),
+    default_best_of: Number(row["Default Best Of"] || 3), participant_count: Number(participantCount || 0),
+    match_count: Number(matchCount || 0), winner: String(winner || ""),
+    rules_url: tournamentWebsiteUrl_(row["Rules URL"]), registration_url: tournamentWebsiteUrl_(row["Registration URL"]),
+    stream_url: tournamentWebsiteUrl_(row["Stream URL"]), start_at: tournamentDateIso_(row["Start At"]),
+    end_at: tournamentDateIso_(row["End At"]), created_at: tournamentDateIso_(row["Created At"]),
+  };
+}
+
+function tournamentWebsitePlayer_(row) {
+  return {seed: Number(row.Seed || 0), player: String(row.Player || ""), country: String(row.Country || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3)};
+}
+
+function tournamentWebsiteMatch_(row) {
+  return {
+    match_id: String(row["Match ID"] || ""), round: String(row.Round || ""), order: Number(row["Bracket Order"] || 0),
+    player1: String(row["Player 1"] || "TBD"), player2: String(row["Player 2"] || "TBD"), best_of: Number(row["Best Of"] || 3),
+    highlighted: tournamentBool_(row.Highlighted), status: String(row.Status || ""),
+    series_score: String(row["Series Score"] || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
+    winner: String(row.Winner || ""), scheduled_at: tournamentDateIso_(row["Scheduled At"]),
+    stream_url: tournamentWebsiteUrl_(row["Stream URL"]), updated_at: tournamentDateIso_(row["Updated At"]),
+  };
+}
+
+function tournamentWebsiteUrl_(value) {
+  const url = String(value || "").trim();
+  return /^https:\/\/[a-z0-9.-]+(?:[\/:?#][^\s]*)?$/i.test(url) ? url.slice(0, 500) : "";
 }
 
 function tournamentDateIso_(value) {
@@ -989,3 +1088,4 @@ function tournamentLog_(actor, action, matchId, details) {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName(TOURNAMENT.SHEETS.LOG);
   if (sheet) sheet.appendRow([new Date(), String(actor || ""), action, matchId || "", details || "", tournamentActiveId_()]);
 }
+

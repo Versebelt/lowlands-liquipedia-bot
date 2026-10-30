@@ -124,6 +124,9 @@ def validate_tournament(tournament: dict[str, Any]) -> int:
         raise TournamentExportError("Tournament participants or matches are missing.")
     if len(matches) > size - 1:
         raise TournamentExportError("Tournament contains more matches than a single-elimination bracket permits.")
+    bracket_id = str(tournament.get("liquipedia_bracket_id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9]{12}", bracket_id):
+        raise TournamentExportError("Tournament does not have a valid persistent Liquipedia bracket ID.")
     return size
 
 
@@ -163,7 +166,8 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
     if len(rounds) > expected_rounds:
         raise TournamentExportError("Tournament contains too many rounds for its bracket size.")
 
-    lines = ["==Results==", f"{{{{Bracket|Bracket/{size}|id={wiki_text(tournament.get('id'), limit=80)}"]
+    bracket_id = str(tournament["liquipedia_bracket_id"])
+    lines = ["==Results==", f"{{{{Bracket|Bracket/{size}|id={bracket_id}"]
     for round_index, round_name in enumerate(rounds, start=1):
         lines.append("")
         lines.append(f"<!-- {round_name} -->")
