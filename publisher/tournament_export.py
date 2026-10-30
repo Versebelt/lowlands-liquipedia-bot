@@ -125,7 +125,7 @@ def validate_tournament(tournament: dict[str, Any]) -> int:
     if len(matches) > size - 1:
         raise TournamentExportError("Tournament contains more matches than a single-elimination bracket permits.")
     bracket_id = str(tournament.get("liquipedia_bracket_id") or "")
-    if not re.fullmatch(r"[A-Za-z0-9]{12}", bracket_id):
+    if not re.fullmatch(r"[A-Za-z0-9]{10}", bracket_id):
         raise TournamentExportError("Tournament does not have a valid persistent Liquipedia bracket ID.")
     return size
 

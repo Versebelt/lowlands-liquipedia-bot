@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import requests
+
 from league_bot.tournament import (
     TournamentApi,
     TournamentError,
@@ -67,6 +69,40 @@ class TournamentTests(unittest.TestCase):
         self.assertIn("bovenste/linker speler", host_field.value)
         self.assertTrue(any(field.name == "Reglement" for field in embed.fields))
         self.assertTrue(any("Waiting for admin start permission" in field.value for field in embed.fields))
+
+    def test_public_match_embed_hides_party_link(self):
+        live = dict(MATCH, party_url="https://www.geoguessr.com/party/abc123")
+        private_text = " ".join(field.value for field in tournament_match_embed(live).fields)
+        public_text = " ".join(field.value for field in tournament_match_embed(live, private=False).fields)
+        self.assertIn("geoguessr.com/party/abc123", private_text)
+        self.assertNotIn("geoguessr.com/party", public_text)
+        self.assertIn("/mymatch", public_text)
+
+    @patch("league_bot.tournament.requests.get")
+    def test_connection_errors_never_expose_the_secret(self, get):
+        secret = "s" * 40
+        get.side_effect = requests.ConnectionError(
+            f"Max retries exceeded with url: /macros/s/example/exec?secret={secret}&action=match"
+        )
+        with self.assertRaises(TournamentError) as raised:
+            TournamentApi("https://script.google.com/macros/s/example/exec", secret).bracket()
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIn("ConnectionError", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+
+    @patch("league_bot.tournament.requests.get")
+    def test_http_errors_report_only_the_status(self, get):
+        secret = "s" * 40
+        response = Mock(status_code=503)
+        response.raise_for_status.side_effect = requests.HTTPError(
+            f"503 Server Error for url: https://script.google.com/macros/s/example/exec?secret={secret}",
+            response=response,
+        )
+        get.return_value = response
+        with self.assertRaises(TournamentError) as raised:
+            TournamentApi("https://script.google.com/macros/s/example/exec", secret).bracket()
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIn("HTTP 503", str(raised.exception))
 
     def test_bracket_embed_groups_rounds_and_marks_highlighted_match(self):
         embed = tournament_bracket_embed(

@@ -26,6 +26,13 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
         self.assertIn(expected, SOURCE)
         self.assertIn("resize:fill:512:512/gravity:no:0:0/plain/", SOURCE)
 
+    def test_liquipedia_bracket_ids_have_ten_characters(self):
+        self.assertIn("/^[A-Za-z0-9]{10}$/", SOURCE)
+        self.assertIn("Array.from({length: 10}", SOURCE)
+        self.assertNotIn("Array.from({length: 12}", SOURCE)
+        ensure = SOURCE.split("function tournamentEnsureLiquipediaBracketIds_", 1)[1].split("\n}", 1)[0]
+        self.assertIn("tournamentValidLiquipediaBracketId_", ensure)
+
     def test_avatar_cache_and_batching_are_enabled(self):
         self.assertIn("UrlFetchApp.fetchAll", SOURCE)
         self.assertIn("CacheService.getScriptCache", SOURCE)

@@ -12,7 +12,7 @@ TOURNAMENT = {
     "id": "practice-1",
     "name": "ACNL Practice Cup",
     "bracket_size": 4,
-    "liquipedia_bracket_id": "qFhEInlFiO12",
+    "liquipedia_bracket_id": "qFhEInlFiO",
     "winner": "Trekk",
     "participants": [
         {"seed": 2, "player": "Matedu", "country": "BE"},
@@ -59,7 +59,7 @@ class TournamentExportTests(unittest.TestCase):
         self.assertTrue(text.startswith("<!-- LOWLANDS_LEAGUE_MANAGED_TEST_PAGE -->"))
         self.assertIn("{{ParticipantTable|title=Participants", text)
         self.assertLess(text.index("1Opponent|Trekk"), text.index("1Opponent|Matedu"))
-        self.assertIn("{{Bracket|Bracket/4|id=qFhEInlFiO12", text)
+        self.assertIn("{{Bracket|Bracket/4|id=qFhEInlFiO", text)
         self.assertIn("|R1M2={{Match", text)
         self.assertIn("|R2M1={{Match", text)
         self.assertIn("SoloOpponent|Trekk|flag=nl|score=3", text)
@@ -80,11 +80,13 @@ class TournamentExportTests(unittest.TestCase):
             build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id=""))
 
     def test_accepts_letters_and_rejects_wrong_length_or_symbols(self):
-        self.assertIn("id=qFhEInlFiO12", build_wikicode(TOURNAMENT))
+        self.assertIn("id=qFhEInlFiO", build_wikicode(TOURNAMENT))
         with self.assertRaisesRegex(TournamentExportError, "persistent Liquipedia bracket ID"):
-            build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id="abc1234567"))
+            build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id="abc123456789"))
         with self.assertRaisesRegex(TournamentExportError, "persistent Liquipedia bracket ID"):
-            build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id="abc12345678!"))
+            build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id="abc123456"))
+        with self.assertRaisesRegex(TournamentExportError, "persistent Liquipedia bracket ID"):
+            build_wikicode(dict(TOURNAMENT, liquipedia_bracket_id="abc123456!"))
 
     def test_escapes_wikicode_control_characters(self):
         self.assertEqual(wiki_text("A|B{{C}}"), "A-B(C)")

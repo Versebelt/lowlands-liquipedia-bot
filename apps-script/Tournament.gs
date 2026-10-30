@@ -411,12 +411,17 @@ function tournamentEnsureInitialTournament_() {
   ]);
 }
 
+// Liquipedia requires bracket IDs of exactly ten letters or digits.
+function tournamentValidLiquipediaBracketId_(value) {
+  return /^[A-Za-z0-9]{10}$/.test(String(value || "").trim());
+}
+
 function tournamentNewLiquipediaBracketId_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   const used = new Set(tournamentRows_(sheet).map((row) => String(row["Liquipedia Bracket ID"] || "")));
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   let id = "";
-  do id = Array.from({length: 12}, () => characters[Math.floor(Math.random() * characters.length)]).join("");
+  do id = Array.from({length: 10}, () => characters[Math.floor(Math.random() * characters.length)]).join("");
   while (used.has(id));
   return id;
 }
@@ -425,7 +430,7 @@ function tournamentEnsureLiquipediaBracketIds_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Liquipedia Bracket ID") + 1;
   tournamentRows_(sheet).forEach((row) => {
-    if (!String(row["Liquipedia Bracket ID"] || "").trim()) {
+    if (!tournamentValidLiquipediaBracketId_(row["Liquipedia Bracket ID"])) {
       sheet.getRange(row.__row, column).setValue(tournamentNewLiquipediaBracketId_());
     }
   });
@@ -823,7 +828,7 @@ function tournamentWebsiteDetail_(tournamentId) {
   if (!/^[a-z0-9-]{1,80}$/i.test(id)) throw Error("Invalid tournament ID.");
   const tournament = tournamentById_(id);
   if (!tournament) throw Error("Tournament not found.");
-  if (!String(tournament["Liquipedia Bracket ID"] || "").trim()) {
+  if (!tournamentValidLiquipediaBracketId_(tournament["Liquipedia Bracket ID"])) {
     const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Liquipedia Bracket ID") + 1;
     tournament["Liquipedia Bracket ID"] = tournamentNewLiquipediaBracketId_();
     SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)

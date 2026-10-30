@@ -40,25 +40,41 @@ class TournamentApi:
             )
 
     @staticmethod
-    def _payload(response: requests.Response) -> dict[str, Any]:
+    def _request_failed(exc: Exception) -> TournamentError:
+        # requests puts the full URL, including the secret query parameter, in
+        # its messages. Report only the error type and HTTP status.
+        response = getattr(exc, "response", None)
+        status = f" HTTP {response.status_code}" if response is not None else ""
+        return TournamentError(f"Tournament API request failed ({type(exc).__name__}{status}).")
+
+    def _payload(self, response: requests.Response) -> dict[str, Any]:
         try:
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as exc:
-            raise TournamentError(f"Tournament API request failed: {exc}") from exc
+            raise self._request_failed(exc) from None
         if not payload.get("ok"):
-            raise TournamentError(str(payload.get("error") or "Tournament API rejected the request."))
+            error = str(payload.get("error") or "Tournament API rejected the request.")
+            raise TournamentError(error.replace(self.secret, "***") if self.secret else error)
         return payload
 
     def get(self, action: str, **parameters: object) -> dict[str, Any]:
         self._require_config()
         query = urlencode({"secret": self.secret, "action": action, **parameters})
-        return self._payload(requests.get(f"{self.url}?{query}", timeout=self.timeout))
+        try:
+            response = requests.get(f"{self.url}?{query}", timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise self._request_failed(exc) from None
+        return self._payload(response)
 
     def post(self, action: str, **parameters: object) -> dict[str, Any]:
         self._require_config()
         body = {"secret": self.secret, "action": action, **parameters}
-        return self._payload(requests.post(self.url, json=body, timeout=self.timeout)).get("data", {})
+        try:
+            response = requests.post(self.url, json=body, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise self._request_failed(exc) from None
+        return self._payload(response).get("data", {})
 
     def match_for_user(
         self, discord_user_id: int, discord_name: str = "", discord_display_name: str = ""
@@ -74,7 +90,10 @@ class TournamentApi:
         return self.get("bracket")
 
 
-def tournament_match_embed(match: dict[str, Any], bracket_url: str = "", rules_url: str = "") -> discord.Embed:
+def tournament_match_embed(
+    match: dict[str, Any], bracket_url: str = "", rules_url: str = "", *, private: bool = True
+) -> discord.Embed:
+    """Build a match card; pass private=False for messages visible to the whole channel."""
     highlighted = bool(match.get("highlighted"))
     player_one = str(match.get("player1") or "TBD")
     player_two = str(match.get("player2") or "TBD")
@@ -106,7 +125,12 @@ def tournament_match_embed(match: dict[str, Any], bracket_url: str = "", rules_u
         permission = "Released by admin" if match.get("admin_released") else "Waiting for admin start permission"
         embed.add_field(name="Featured broadcast match", value=permission, inline=False)
     if match.get("party_url"):
-        embed.add_field(name="Party", value=f"[Open GeoGuessr party]({match['party_url']})", inline=False)
+        party = (
+            f"[Open GeoGuessr party]({match['party_url']})"
+            if private
+            else "De partylink staat klaar. Open hem privé met `/mymatch`."
+        )
+        embed.add_field(name="Party", value=party, inline=False)
     if match.get("stream_url"):
         embed.add_field(name="Broadcast", value=f"[Watch the stream]({match['stream_url']})", inline=False)
     if rules_url:

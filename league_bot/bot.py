@@ -271,14 +271,16 @@ class TournamentUrlModal(discord.ui.Modal):
 
 
 class TournamentMatchView(discord.ui.View):
-    def __init__(self, match: dict[str, object]) -> None:
+    def __init__(self, match: dict[str, object], *, private: bool = True) -> None:
         super().__init__(timeout=900)
         self.match = match
+        self.private = private
         blocked = bool(match.get("highlighted")) and not bool(match.get("admin_released"))
         ready = bool(match.get("player1_ready")) and bool(match.get("player2_ready"))
         self.party.disabled = not ready or blocked
         self.result.disabled = not bool(match.get("party_url"))
-        if ready and not blocked:
+        # Preset links are private; a view in a public channel never shows them.
+        if private and ready and not blocked:
             for index, preset in enumerate(match.get("presets") or [], start=1):
                 if preset:
                     self.add_item(discord.ui.Button(label=f"Game {index} preset", url=str(preset), emoji="🗺️"))
@@ -295,9 +297,15 @@ class TournamentMatchView(discord.ui.View):
                 discord_name=interaction.user.name,
                 discord_display_name=getattr(interaction.user, "display_name", ""),
             )
-            await interaction.edit_original_response(
-                embed=tournament_match_embed(match), view=TournamentMatchView(match)
-            )
+            if self.private:
+                await interaction.edit_original_response(
+                    embed=tournament_match_embed(match), view=TournamentMatchView(match)
+                )
+            else:
+                # Editing a public card would expose the party and preset links.
+                await interaction.followup.send(
+                    embed=tournament_match_embed(match), view=TournamentMatchView(match), ephemeral=True
+                )
         except TournamentError as exc:
             await interaction.followup.send(str(exc), ephemeral=True)
 
@@ -1057,8 +1065,9 @@ async def handle_prefix_command(message: discord.Message) -> None:
                     match,
                     str(config.get("Public Bracket URL") or ""),
                     str(config.get("Rules URL") or ""),
+                    private=False,
                 ),
-                view=TournamentMatchView(match),
+                view=TournamentMatchView(match, private=False),
                 mention_author=False,
             )
         elif command == "bracket":
@@ -1089,7 +1098,7 @@ async def handle_prefix_command(message: discord.Message) -> None:
                 match_id, score = parts[0], parts[-1]
                 winner = " ".join(parts[1:-1])
                 match = await asyncio.to_thread(client.tournament.post, "resolve", match_id=match_id, actor=str(message.author.id), winner=winner, score=score)
-            await message.reply(embed=tournament_match_embed(match), mention_author=False)
+            await message.reply(embed=tournament_match_embed(match, private=False), mention_author=False)
         elif command in {"adminconfig", "setupreminders", "setannouncement", "setreminderrole", "reminders", "testreminder"}:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
