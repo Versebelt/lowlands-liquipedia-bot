@@ -112,6 +112,19 @@ class TournamentTests(unittest.TestCase):
         self.assertEqual(embed.fields[0].name, "Quarterfinal")
         self.assertIn("📺", embed.fields[0].value)
 
+    def test_bracket_embed_shows_checkin_window(self):
+        embed = tournament_bracket_embed({
+            "config": {
+                "Tournament Name": "Practice Cup",
+                "Check-in Opens At": "2026-12-14T17:00:00Z",
+                "Check-in Closes At": "2026-12-14T17:55:00Z",
+            },
+            "matches": [],
+        })
+        field = next(field for field in embed.fields if field.name == "Check-in")
+        self.assertIn("<t:", field.value)
+        self.assertIn(" tot ", field.value)
+
     def test_rules_embed_links_current_regulations(self):
         embed = tournament_rules_embed(
             {"config": {"Tournament Name": "Practice Cup", "Rules URL": "https://example.com/rules"}}

@@ -36,7 +36,9 @@ their Discord identity to the web app, which creates or updates their row in
 `Tournament Players`. Duplicate Discord accounts, GeoGuessr accounts and player
 names are rejected.
 
-`/checkin` marks the player as present. Only checked-in players are eligible for
+`/checkin` marks the player as present during the active tournament's configured
+`Check-in Opens At` / `Check-in Closes At` window. Blank fields keep the legacy
+always-open behaviour. Only checked-in players are eligible for
 bracket generation. `/unregister` keeps the audit trail but changes the player to
 `Withdrawn` instead of deleting the row.
 

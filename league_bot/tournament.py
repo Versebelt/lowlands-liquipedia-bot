@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -148,6 +149,13 @@ def tournament_bracket_embed(payload: dict[str, Any]) -> discord.Embed:
     embed = discord.Embed(title=title, color=0x01397A, url=bracket_url or None)
     if rules_url:
         embed.description = f"[Lees het volledige toernooireglement]({rules_url})"
+    checkin_opens = _discord_timestamp(config.get("Check-in Opens At"))
+    checkin_closes = _discord_timestamp(
+        config.get("Check-in Closes At") or (config.get("Start At") if checkin_opens else None)
+    )
+    if checkin_opens or checkin_closes:
+        window = " tot ".join(value for value in (checkin_opens, checkin_closes) if value)
+        embed.add_field(name="Check-in", value=window, inline=False)
     current_round = None
     lines: list[str] = []
     fields: list[tuple[str, str]] = []
@@ -170,6 +178,17 @@ def tournament_bracket_embed(payload: dict[str, Any]) -> discord.Embed:
         embed.add_field(name=name, value=value[:1024], inline=False)
     embed.set_footer(text="📺 Highlighted match · Results update from the official Sheet")
     return embed
+
+
+def _discord_timestamp(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return f"<t:{int(parsed.timestamp())}:F>"
 
 
 def tournament_rules_embed(payload: dict[str, Any]) -> discord.Embed:

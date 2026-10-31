@@ -60,6 +60,13 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
         self.assertIn("CacheService.getScriptCache", SOURCE)
         self.assertIn("21600", SOURCE)
 
+    def test_checkin_window_is_enforced_server_side(self):
+        self.assertIn('"Check-in Opens At", "Check-in Closes At"', SOURCE)
+        checkin = SOURCE.split("function tournamentCheckIn_(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("tournamentCheckInWindow_", checkin)
+        self.assertIn('window.state === "too_early"', checkin)
+        self.assertIn('window.state === "closed"', checkin)
+
 
 if __name__ == "__main__":
     unittest.main()

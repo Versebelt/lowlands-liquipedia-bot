@@ -43,6 +43,7 @@ const TOURNAMENT = {
       "Default Best Of", "Preset 1", "Preset 2", "Preset 3", "Public Spreadsheet ID",
       "Public Bracket URL", "Stream URL", "Created At", "Archived At", "Rules URL",
       "Registration URL", "Start At", "End At", "Liquipedia Bracket ID",
+      "Check-in Opens At", "Check-in Closes At",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -148,9 +149,13 @@ function createTournament() {
   if (![8, 16, 32, 64].includes(maximum)) throw Error("Maximum players must be 8, 16, 32 or 64.");
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
+  const tournamentsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  const newRow = tournamentsSheet.getLastRow() + 1;
   const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
-    publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_()];
-  SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS).appendRow(row);
+    publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_(),
+    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
+    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))'];
+  tournamentsSheet.appendRow(row);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
   tournamentSetConfig_("Tournament Status", "Registration");
@@ -407,7 +412,7 @@ function tournamentEnsureInitialTournament_() {
     Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
     config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
     config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "", config["Rules URL"] || "",
-    "", "", "", tournamentNewLiquipediaBracketId_(),
+    "", "", "", tournamentNewLiquipediaBracketId_(), "", "",
   ]);
 }
 
@@ -714,7 +719,9 @@ function tournamentInitSheet_(ss, name, headers) {
 }
 
 function tournamentValidation_(ss) {
-  const players = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), matches = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  const tournaments = ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS), players = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), matches = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  tournaments.getRange("R2:S").setNumberFormat("yyyy-mm-dd hh:mm");
+  tournaments.getRange("U2:V").setNumberFormat("yyyy-mm-dd hh:mm");
   players.getRange("A2:A").setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireNumberBetween(1, 64)
@@ -888,6 +895,8 @@ function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
     rules_url: tournamentWebsiteUrl_(row["Rules URL"]), registration_url: tournamentWebsiteUrl_(row["Registration URL"]),
     stream_url: tournamentWebsiteUrl_(row["Stream URL"]), start_at: tournamentDateIso_(row["Start At"]),
     end_at: tournamentDateIso_(row["End At"]), created_at: tournamentDateIso_(row["Created At"]),
+    checkin_opens_at: tournamentDateIso_(row["Check-in Opens At"]),
+    checkin_closes_at: tournamentDateIso_(row["Check-in Closes At"] || (row["Check-in Opens At"] && row["Start At"])),
   };
 }
 
@@ -1000,6 +1009,34 @@ function tournamentAmsterdamTime_(iso) {
   return Number.isNaN(date.getTime()) ? "" : Utilities.formatDate(date, "Europe/Amsterdam", "EEE d MMM yyyy HH:mm");
 }
 
+function tournamentCheckInDate_(value, field) {
+  if (value === "" || value === null || value === undefined) return null;
+  const iso = tournamentDateIso_(value);
+  if (!iso) throw Error("Check-in is verkeerd ingesteld: " + field + " moet een geldige datum en tijd zijn.");
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) throw Error("Check-in is verkeerd ingesteld: " + field + " moet een geldige datum en tijd zijn.");
+  return date;
+}
+
+function tournamentCheckInWindow_(tournament, now) {
+  const openValue = tournament["Check-in Opens At"];
+  const closeValue = tournament["Check-in Closes At"] || (openValue ? tournament["Start At"] : "");
+  if (!openValue && !closeValue) return {state: "unconfigured", opensAt: null, closesAt: null};
+  const opensAt = tournamentCheckInDate_(openValue, "Check-in Opens At");
+  const closesAt = tournamentCheckInDate_(closeValue, "Check-in Closes At");
+  if (opensAt && closesAt && closesAt.getTime() <= opensAt.getTime()) {
+    throw Error("Check-in is verkeerd ingesteld: de sluitingstijd moet na de openingstijd liggen.");
+  }
+  const current = now instanceof Date ? now : new Date();
+  if (opensAt && current.getTime() < opensAt.getTime()) return {state: "too_early", opensAt, closesAt};
+  if (closesAt && current.getTime() >= closesAt.getTime()) return {state: "closed", opensAt, closesAt};
+  return {state: "open", opensAt, closesAt};
+}
+
+function tournamentCheckInTimeLabel_(date) {
+  return Utilities.formatDate(date, "Europe/Amsterdam", "d MMMM yyyy 'om' HH:mm");
+}
+
 function tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayName) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
   const id = String(discordUserId || "").trim(), names = [discordName, discordDisplayName]
@@ -1083,6 +1120,9 @@ function tournamentRegister_(payload) {
 }
 
 function tournamentCheckIn_(payload) {
+  const window = tournamentCheckInWindow_(tournamentActive_(), new Date());
+  if (window.state === "too_early") throw Error("Check-in opent op " + tournamentCheckInTimeLabel_(window.opensAt) + ".");
+  if (window.state === "closed") throw Error("De check-in is gesloten. Neem contact op met een organisator.");
   const identity = tournamentRegistrationIdentity_(payload), row = tournamentPlayerByDiscord_(identity.discordId, identity.discordName, payload.discord_display_name);
   if (!row) throw Error("You are not registered. Use /register first.");
   if (["Withdrawn", "Disqualified"].includes(String(row.Status))) throw Error("This registration cannot be checked in.");
