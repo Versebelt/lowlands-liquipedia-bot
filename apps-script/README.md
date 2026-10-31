@@ -28,6 +28,23 @@ logs are tagged with that ID and are never reset for the next event. The
 The secret is required for every request. The public bracket spreadsheet ID is
 already present in the initial Admin spreadsheet created for this project.
 
+## Automatic deploy
+
+After the first installation, `.github/workflows/deploy-apps-script.yml` deploys
+every change to `apps-script/` on `main`: it runs the tests, uploads only
+`appsscript.json` and `Tournament.gs` (as `Code.js`), creates a version, points
+the existing web-app deployment at it (the `/exec` URL stays the same) and checks
+that the web app still answers. It needs these repository secrets:
+
+- `CLASPRC_JSON`: the contents of `~/.clasprc.json` after `clasp login`;
+- `APPS_SCRIPT_ID`: the script ID of the Tournament Control project;
+- `APPS_SCRIPT_DEPLOYMENT_ID`: the ID of the web-app deployment;
+- `TOURNAMENT_API_URL` and `TOURNAMENT_API_SECRET` (already used by the
+  Liquipedia test workflow) for the final check.
+
+Without the first three the workflow skips the deploy with a warning. After a
+deploy that adds sheet columns, run **Set up / repair Admin sheet** once.
+
 ## Player registration
 
 Players register through Discord with `/register` or
@@ -97,7 +114,53 @@ on the NK hub automatically. Once its final has a winner, the top
 `Event Qualifies` players count as qualified: they can no longer register for
 or check in to another tournament of the same event (matched on Discord user ID
 or GeoGuessr user ID). Players who registered elsewhere before qualifying are
-not removed automatically, but their check-in is refused.
+not removed automatically, but their check-in is refused. This block applies
+only to tournaments that are qualifiers themselves (`Event Qualifies` of 1 or
+more), so qualified players can still enter later phases such as the group
+stage.
+
+`Entry From` limits who may register and check in. List final places of other
+tournaments as `tournament-id:from-to` and invitations as a bare Discord or
+GeoGuessr user ID, separated by commas. Leave it empty for open registration.
+Places are taken as they are: a player who has since qualified elsewhere is not
+replaced by the next player ("unique entries, no replacement").
+
+## Formats
+
+The `Type` column chooses the bracket format:
+
+- `Single Elimination` (and `Practice`): the classic bracket described below.
+- `Double Elimination`: an upper and a lower bracket; a first loss drops a player
+  to the lower bracket, a second loss eliminates. Without `Advance Count` it ends
+  in a grand final (no bracket reset). With `Advance Count` (2, 4, 8 …) it stops
+  once that many players remain, half unbeaten from the upper bracket and half
+  from the lower bracket. Match IDs are `<id>-U1-M1`, `<id>-L1-M1` and
+  `<id>-GF-M1`.
+- `Round Robin`: `Groups` groups in which everyone plays everyone once. Seeds are
+  spread snake-wise (seeds 1 to 4 each head a different group). Match IDs are
+  `<id>-GA-S1-M1` (group A, matchday 1). Standings: match wins, then map
+  difference, then maps won; remaining ties are for the organisers to settle.
+
+Results work the same in every format: confirm the winner and score, and the
+winner (and in double elimination the loser) moves to the next match
+automatically. A player who meets a BYE there advances without playing. Final
+placements for every format feed `Event Qualifies`, `Entry From` and the NK page
+on the website. The Liquipedia export only supports single elimination and
+refuses the other formats.
+
+### NK 2027 set-up
+
+| Tournament | Type | Event Phase | Event Qualifies | Other |
+| --- | --- | --- | --- | --- |
+| Open Qualifier 1–4 | Single Elimination | `oq1`–`oq4` | 4 | |
+| ROCvA-F | Single Elimination | `rocvaf` | 0 | |
+| Last Chance Qualifier | Single Elimination | `lcq` | 1 | `Entry From`: places `5-8` of each open qualifier, plus the two ROCvA-F players as user IDs |
+| Group stage | Round Robin | `groups` | 0 | `Groups` = 4, `Entry From`: places `1-4` of each open qualifier, `1` of the LCQ and the invitations |
+| Knockout stage | Double Elimination | `knockout` | 0 | `Advance Count` = 4, `Entry From`: group-stage places `5-12` (all runners-up and thirds) |
+| Quarterfinals | Single Elimination | `quarterfinals` | 0 | `Entry From`: group-stage places `1-4` and knockout places `1-4` |
+
+Every row uses `Event` = `nk-2027`. The ROCvA-F players are listed by user ID
+because only eligible players may take those places.
 
 Brackets support 2, 4, 8, 16, 32 and 64 players. **Create new tournament** offers
 8, 16, 32 and 64 as registration limits; the actual bracket uses the smallest

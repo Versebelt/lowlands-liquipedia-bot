@@ -47,7 +47,7 @@ const TOURNAMENT = {
       "Registration URL", "Start At", "End At", "Liquipedia Bracket ID",
       "Check-in Opens At", "Check-in Closes At",
       "Auto-generate Official Bracket", "Official Bracket Generated At", "Bracket Generation Error",
-      "Event", "Event Phase", "Event Qualifies",
+      "Event", "Event Phase", "Event Qualifies", "Entry From", "Groups", "Advance Count",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -59,12 +59,19 @@ const TOURNAMENT = {
       "Player 1 Ready", "Player 2 Ready", "Admin Released", "Status",
       "Party URL", "Series Score", "Winner", "Next Match ID", "Next Slot",
       "Scheduled At", "Stream URL", "Discord Message ID", "Updated At", "Tournament ID",
+      "Loser Match ID", "Loser Slot",
     ],
     GAMES: [
       "Submitted At", "Match ID", "Game", "Mode", "Result URL", "Submitted By",
       "Player 1 Score", "Player 2 Score", "Winner", "Status", "Notes", "Tournament ID",
     ],
     LOG: ["Timestamp", "Actor", "Action", "Match ID", "Details", "Tournament ID"],
+  },
+  // Bracket formats, chosen with the Type column.
+  TYPES: ["Single Elimination", "Double Elimination", "Round Robin", "Practice"],
+  // Allowed Event and Event Phase values; the phase IDs match content/nk-2027.json on the website.
+  EVENTS: {
+    "nk-2027": ["oq1", "oq2", "oq3", "oq4", "rocvaf", "lcq", "groups", "knockout", "quarterfinals", "lan"],
   },
 };
 
@@ -152,15 +159,22 @@ function createTournament() {
   const id = String(idPrompt.getResponseText() || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
   if (!id) throw Error("Enter a valid Tournament ID.");
   if (tournamentById_(id)) throw Error("Tournament ID already exists: " + id);
-  const maxPrompt = ui.prompt("Maximum players", "Choose 8, 16, 32 or 64.", ui.ButtonSet.OK_CANCEL);
+  const typePrompt = ui.prompt("Format", "single, double or groups (empty = single elimination)", ui.ButtonSet.OK_CANCEL);
+  if (typePrompt.getSelectedButton() !== ui.Button.OK) return;
+  const type = {"": "Single Elimination", single: "Single Elimination", double: "Double Elimination", groups: "Round Robin"}[String(typePrompt.getResponseText() || "").trim().toLowerCase()];
+  if (!type) throw Error("Choose single, double or groups.");
+  const groups = type === "Round Robin";
+  const maxPrompt = ui.prompt("Maximum players", groups ? "Choose 2 to 64." : "Choose 8, 16, 32 or 64.", ui.ButtonSet.OK_CANCEL);
   if (maxPrompt.getSelectedButton() !== ui.Button.OK) return;
   const maximum = Number(maxPrompt.getResponseText());
-  if (![8, 16, 32, 64].includes(maximum)) throw Error("Maximum players must be 8, 16, 32 or 64.");
+  if (groups ? !(Number.isInteger(maximum) && maximum >= 2 && maximum <= 64) : ![8, 16, 32, 64].includes(maximum)) {
+    throw Error(groups ? "Maximum players must be 2 to 64." : "Maximum players must be 8, 16, 32 or 64.");
+  }
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const tournamentsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   const newRow = tournamentNextRow_(tournamentsSheet);
-  const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
+  const row = [id, name, type, "Registration", maximum, "", 3, "", "", "",
     publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_(),
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', true, "", ""];
@@ -204,6 +218,11 @@ function archiveActiveTournament() {
 }
 
 function tournamentRenderPublicBracket_(sheet, config, matches) {
+  const format = tournamentBracketFormat_(config);
+  if (format !== "single-elimination") {
+    tournamentRenderPublicSections_(sheet, config, matches, format);
+    return;
+  }
   const sorted = matches
     .filter((match) => String(match.match_id || "").trim() || String(match.round || "").trim())
     .slice()
@@ -319,6 +338,69 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   sheet.getRange(finalCenter + 3, centerColumn + 1, 3, 1).setBorder(null, true, null, null, null, null, "#f47806", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(centerColumn + offset, width));
   sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
+  sheet.setConditionalFormatRules([]);
+}
+
+// Double elimination and groups: every bracket half or group is a block of
+// round columns, and each group gets its standings table above its matches.
+function tournamentRenderPublicSections_(sheet, config, matches, format) {
+  const sorted = matches.filter((match) => String(match.match_id || "").trim()).slice().sort((a, b) => a.order - b.order);
+  const sections = [];
+  sorted.forEach((match) => {
+    const round = String(match.round || ""), day = String(match.match_id).match(/-S(\d+)-M\d+$/);
+    const title = format === "round-robin" ? round : /^Upper/.test(round) ? "Upper bracket" : /^Lower/.test(round) ? "Lower bracket" : "Grand final";
+    const name = format === "round-robin" && day ? "Matchday " + day[1] : round;
+    let section = sections.find((item) => item.title === title);
+    if (!section) sections.push(section = {title, columns: []});
+    let column = section.columns.find((item) => item.name === name);
+    if (!column) section.columns.push(column = {name, matches: []});
+    column.matches.push(match);
+  });
+  const standings = format === "round-robin" ? tournamentGroupStandings_(sorted) : [];
+  const tallest = (section) => Math.max(...section.columns.map((column) => column.matches.length));
+  const totalColumns = Math.max(7, Math.max(1, ...sections.map((section) => section.columns.length)) * 4 - 1);
+  let totalRows = 8;
+  sections.forEach((section) => {
+    const table = standings.find((group) => group.name === section.title);
+    totalRows += 3 + (table ? table.standings.length + 2 : 0) + tallest(section) * 5;
+  });
+  if (sheet.getMaxColumns() < totalColumns) sheet.insertColumnsAfter(sheet.getMaxColumns(), totalColumns - sheet.getMaxColumns());
+  if (sheet.getMaxRows() < totalRows) sheet.insertRowsAfter(sheet.getMaxRows(), totalRows - sheet.getMaxRows());
+  sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
+  sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
+  sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
+  sheet.getRange(1, 1, 1, totalColumns).merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament"))
+    .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
+  const bracketLabel = String(config["Bracket Label"] || "OFFICIAL BRACKET").toUpperCase();
+  sheet.getRange(2, 1, 1, totalColumns).merge().setValue(bracketLabel + "  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
+    .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+  tournamentDrawRulesLink_(sheet, totalColumns, config);
+  for (let column = 1; column <= totalColumns; column++) sheet.setColumnWidth(column, [34, 180, 70, 70][column % 4]);
+  let row = 5;
+  if (!sections.length) sheet.getRange(row, 1, 1, totalColumns).merge().setValue("The schedule appears here once the draw has been made.");
+  sections.forEach((section) => {
+    sheet.getRange(row, 1, 1, totalColumns).merge().setValue(section.title.toUpperCase())
+      .setBackground("#f47806").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
+    row += 2;
+    const table = standings.find((group) => group.name === section.title);
+    if (table) {
+      const values = [["Player", "Played", "W", "L", "Maps", "Map +/-"]].concat(table.standings.map((entry, index) => [
+        (index + 1) + ". " + entry.player, entry.played, entry.wins, entry.losses, entry.maps_won + "-" + entry.maps_lost, entry.maps_won - entry.maps_lost,
+      ]));
+      sheet.getRange(row, 1, values.length, 6).setValues(values).setBackground("#fffefb").setFontWeight("bold")
+        .setBorder(true, true, true, true, true, true, "#00182f", SpreadsheetApp.BorderStyle.SOLID);
+      sheet.getRange(row, 1, 1, 6).setBackground("#00182f").setFontColor("#ffffff");
+      row += values.length + 1;
+    }
+    section.columns.forEach((column, index) => {
+      const start = 1 + index * 4;
+      sheet.getRange(row, start, 1, 3).merge().setValue(column.name.toUpperCase())
+        .setBackground("#00182f").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
+      column.matches.forEach((match, matchIndex) => tournamentDrawBracketMatch_(sheet, start, row + 1 + matchIndex * 5, match, false, ""));
+    });
+    row += 2 + tallest(section) * 5;
+  });
+  sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28);
   sheet.setConditionalFormatRules([]);
 }
 
@@ -690,6 +772,13 @@ function tournamentBuildBracket_(tournament, sourcePlayers, label) {
   const players = tournamentPrepareBracketPlayers_(sourcePlayers, label);
   const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
   if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " players.");
+  const format = tournamentBracketFormat_(tournament);
+  if (format === "round-robin") return tournamentBuildRoundRobin_(tournament, players);
+  if (format === "double-elimination") {
+    const rows = tournamentBuildDoubleElimination_(tournament, players);
+    tournamentAdvanceByes_(rows);
+    return {rows, bracketSize: tournamentBracketSizeFor_(tournament, players.length), playerCount: players.length};
+  }
   const configuredSize = Number(tournament["Bracket Size"] || 0);
   const bracketSize = configuredSize >= players.length ? configuredSize : Math.pow(2, Math.ceil(Math.log(players.length) / Math.log(2)));
   if (![2, 4, 8, 16, 32, 64].includes(bracketSize)) throw Error("Bracket size must be 2, 4, 8, 16, 32 or 64.");
@@ -738,22 +827,33 @@ function tournamentGenerateOfficialBracket_(tournament, options) {
   return Object.assign({generatedAt}, definition);
 }
 
-// A player drawn against a BYE wins that match without playing. Rows are in
-// round order, so walkovers that create new BYE pairings resolve in one pass.
+// A player drawn against a BYE wins that match without playing. In double
+// elimination the BYE "loses" and drops to the lower bracket, which can create
+// new BYE pairings there, so repeat until nothing changes.
 function tournamentAdvanceByes_(rows) {
   const column = (name) => TOURNAMENT.HEADERS.MATCHES.indexOf(name);
   const p1 = column("Player 1"), p2 = column("Player 2"), status = column("Status"), winner = column("Winner");
   const next = column("Next Match ID"), slot = column("Next Slot"), id = column("Match ID");
-  rows.forEach((row) => {
-    if (row[p1] === "TBD" || row[p2] === "TBD" || (row[p1] !== "BYE" && row[p2] !== "BYE")) return;
-    row[winner] = row[p1] === "BYE" ? row[p2] : row[p1];
-    row[status] = "Complete";
-    const target = rows.find((candidate) => candidate[id] === row[next]);
+  const loser = column("Loser Match ID"), loserSlot = column("Loser Slot");
+  const place = (targetId, slotValue, name) => {
+    const target = rows.find((candidate) => candidate[id] === targetId);
     if (!target) return;
-    target[Number(row[slot]) === 2 ? p2 : p1] = row[winner];
+    target[Number(slotValue) === 2 ? p2 : p1] = name;
     const filled = target[p1] !== "TBD" && target[p2] !== "TBD";
     target[status] = filled ? "Waiting for players" : "Waiting for opponent";
-  });
+  };
+  let changed = true;
+  while (changed) {
+    changed = false;
+    rows.forEach((row) => {
+      if (row[winner] || row[p1] === "TBD" || row[p2] === "TBD" || (row[p1] !== "BYE" && row[p2] !== "BYE")) return;
+      row[winner] = row[p1] === "BYE" ? row[p2] : row[p1];
+      row[status] = "Complete";
+      place(row[next], row[slot], row[winner]);
+      place(row[loser], row[loserSlot], "BYE");
+      changed = true;
+    });
+  }
 }
 
 function tournamentSeedOrder_(size) {
@@ -781,7 +881,169 @@ function tournamentMatchRow_(input) {
     input.bestOf || 3, input.presets[0] || "", input.presets[1] || "", input.presets[2] || "",
     Boolean(input.highlighted), false, false, false, status, "", "0-0", "",
     input.next || "", input.slot || "", "", "", "", new Date(), input.tournamentId || tournamentActiveId_(),
+    input.loser || "", input.loserSlot || "",
   ];
+}
+
+// The Type column picks the format; anything else, such as "Practice", is
+// single elimination.
+function tournamentBracketFormat_(tournament) {
+  const type = String((tournament || {}).Type || "").toLowerCase();
+  if (type.includes("double")) return "double-elimination";
+  if (type.includes("round robin") || type.includes("round-robin") || type.includes("group")) return "round-robin";
+  return "single-elimination";
+}
+
+function tournamentBracketSizeFor_(tournament, playerCount) {
+  const configuredSize = Number(tournament["Bracket Size"] || 0);
+  const size = configuredSize >= playerCount ? configuredSize : Math.pow(2, Math.ceil(Math.log(playerCount) / Math.log(2)));
+  if (![4, 8, 16, 32, 64].includes(size)) throw Error("A double-elimination bracket needs 4, 8, 16, 32 or 64 places.");
+  return size;
+}
+
+function tournamentBracketSettings_(tournament) {
+  const config = tournamentConfig_();
+  return {
+    bestOf: Number(tournament["Default Best Of"] || config["Default Best Of"] || 3),
+    presets: [tournament["Preset 1"] || config["Preset 1"] || "", tournament["Preset 2"] || config["Preset 2"] || "", tournament["Preset 3"] || config["Preset 3"] || ""],
+  };
+}
+
+// Upper and lower bracket: a first loss drops a player to the lower bracket,
+// a second loss eliminates. With an Advance Count the bracket stops once that
+// many players remain, half from each side, without a grand final.
+function tournamentBuildDoubleElimination_(tournament, players) {
+  const id = String(tournament["Tournament ID"]), size = tournamentBracketSizeFor_(tournament, players.length);
+  const settings = tournamentBracketSettings_(tournament), log2 = (value) => Math.round(Math.log(value) / Math.log(2));
+  const advance = Number(tournament["Advance Count"] || 0);
+  if (advance && (advance < 2 || advance > size / 2 || Math.pow(2, log2(advance)) !== advance)) {
+    throw Error("Advance Count must be 2, 4, 8, 16 or 32 and at most half the bracket size.");
+  }
+  const full = !advance, upperRounds = full ? log2(size) : log2(2 * size / advance), lowerRounds = 2 * (upperRounds - 1);
+  const upperCount = (round) => size / Math.pow(2, round);
+  const lowerCount = (round) => size / Math.pow(2, Math.floor((round + 1) / 2) + 1);
+  const upperId = (round, match) => id + "-U" + round + "-M" + match, lowerId = (round, match) => id + "-L" + round + "-M" + match;
+  const finalId = id + "-GF-M1", half = (match) => Math.ceil(match / 2), side = (match) => match % 2 ? 1 : 2;
+  const seeded = {}, seedOrder = tournamentSeedOrder_(size), rows = [];
+  players.forEach((player) => seeded[player.__bracketSeed] = String(player.Player));
+  let order = 1;
+  const add = (input) => rows.push(tournamentMatchRow_(Object.assign({
+    order: order++, bestOf: settings.bestOf, presets: settings.presets, tournamentId: id,
+  }, input)));
+  for (let round = 1; round <= upperRounds; round++) {
+    const count = upperCount(round), last = round === upperRounds;
+    for (let match = 1; match <= count; match++) {
+      add({
+        id: upperId(round, match), round: full && last ? "Upper Final" : "Upper Round " + round,
+        player1: round === 1 ? seeded[seedOrder[(match - 1) * 2]] || "BYE" : "",
+        player2: round === 1 ? seeded[seedOrder[(match - 1) * 2 + 1]] || "BYE" : "",
+        next: last ? (full ? finalId : "") : upperId(round + 1, half(match)), slot: last ? (full ? 1 : "") : side(match),
+        // Upper-bracket losers meet lower-bracket survivors in reverse order, which avoids early rematches.
+        loser: round === 1 ? lowerId(1, half(match)) : lowerId(2 * (round - 1), count + 1 - match),
+        loserSlot: round === 1 ? side(match) : 2,
+      });
+    }
+  }
+  for (let round = 1; round <= lowerRounds; round++) {
+    const count = lowerCount(round), last = round === lowerRounds;
+    for (let match = 1; match <= count; match++) {
+      const next = last ? (full ? finalId : "") : round % 2 ? lowerId(round + 1, match) : lowerId(round + 1, half(match));
+      add({
+        id: lowerId(round, match), round: full && last ? "Lower Final" : "Lower Round " + round, next,
+        slot: last ? (full ? 2 : "") : round % 2 ? 1 : side(match),
+      });
+    }
+  }
+  if (full) add({id: finalId, round: "Grand Final", highlighted: true});
+  return rows;
+}
+
+// Groups where everyone plays everyone once (circle method). Seeds are spread
+// snake-wise, so seeds 1 and 2 land in different groups. Match IDs carry the
+// group and the matchday: <id>-GA-S1-M1.
+function tournamentBuildRoundRobin_(tournament, players) {
+  const id = String(tournament["Tournament ID"]), groupCount = Math.max(1, Number(tournament.Groups || 1));
+  if (groupCount > 8 || players.length < groupCount * 2) throw Error("Use at most 8 groups with at least two players each.");
+  const settings = tournamentBracketSettings_(tournament), groups = Array.from({length: groupCount}, () => []), rows = [];
+  players.forEach((player, index) => {
+    const lap = Math.floor(index / groupCount), position = index % groupCount;
+    groups[lap % 2 ? groupCount - 1 - position : position].push(String(player.Player));
+  });
+  let order = 1;
+  groups.forEach((members, groupIndex) => {
+    const letter = String.fromCharCode(65 + groupIndex), list = members.slice();
+    if (list.length % 2) list.push("");
+    for (let day = 1; day < list.length; day++) {
+      let number = 1;
+      for (let index = 0; index < list.length / 2; index++) {
+        const home = list[index], away = list[list.length - 1 - index];
+        if (home && away) rows.push(tournamentMatchRow_({
+          id: id + "-G" + letter + "-S" + day + "-M" + number++, round: "Group " + letter, order: order++,
+          player1: home, player2: away, bestOf: settings.bestOf, presets: settings.presets, tournamentId: id,
+        }));
+      }
+      list.splice(1, 0, list.pop());
+    }
+  });
+  return {rows, bracketSize: players.length, playerCount: players.length};
+}
+
+// Group tables: match wins first, then map difference, then maps won. Ties
+// beyond that keep draw order and are settled by the organisers.
+function tournamentGroupStandings_(matches) {
+  const groups = [];
+  (matches || []).forEach((match) => {
+    const name = String(match.round || "");
+    if (!/^Group /.test(name)) return;
+    let group = groups.find((item) => item.name === name);
+    if (!group) groups.push(group = {name, rows: {}});
+    const players = [String(match.player1 || ""), String(match.player2 || "")];
+    players.forEach((player) => {
+      if (!group.rows[player]) group.rows[player] = {player, played: 0, wins: 0, losses: 0, maps_won: 0, maps_lost: 0};
+    });
+    const winner = String(match.winner || "");
+    if (!winner || !players.includes(winner)) return;
+    const score = String(match.series_score || "").match(/(\d+)\s*[-–:]\s*(\d+)/);
+    const maps = score ? [Number(score[1]), Number(score[2])].sort((a, b) => b - a) : [0, 0];
+    [[winner, maps[0], maps[1], "wins"], [players[0] === winner ? players[1] : players[0], maps[1], maps[0], "losses"]].forEach(([player, won, lost, field]) => {
+      const row = group.rows[player];
+      row.played++; row[field]++; row.maps_won += won; row.maps_lost += lost;
+    });
+  });
+  return groups.map((group) => ({name: group.name, standings: Object.values(group.rows).sort((a, b) =>
+    b.wins - a.wins || (b.maps_won - b.maps_lost) - (a.maps_won - a.maps_lost) || b.maps_won - a.maps_won)}));
+}
+
+// Final order of a finished double-elimination or group bracket; empty while
+// matches are still open. Groups interleave: every group winner, then every
+// runner-up, and so on.
+function tournamentPlacementsFor_(format, matches) {
+  const real = (name) => name && !["BYE", "TBD"].includes(String(name).toUpperCase());
+  const loserOf = (match) => String(match.player1) === String(match.winner) ? String(match.player2) : String(match.player1);
+  const placed = [];
+  if (format === "round-robin") {
+    const groupMatches = (matches || []).filter((match) => /^Group /.test(String(match.round || "")));
+    if (!groupMatches.length || groupMatches.some((match) => !match.winner)) return [];
+    const groups = tournamentGroupStandings_(groupMatches), depth = Math.max(...groups.map((group) => group.standings.length));
+    for (let position = 0; position < depth; position++) {
+      groups.forEach((group) => { if (group.standings[position]) placed.push(group.standings[position].player); });
+    }
+  } else if (format === "double-elimination") {
+    const parsed = (matches || []).map((match) => {
+      const found = String(match.match_id || "").match(/-(U|L)(\d+)-M\d+$/);
+      return Object.assign({side: /-GF-M\d+$/.test(String(match.match_id || "")) ? "GF" : found ? found[1] : "", number: found ? Number(found[2]) : 0}, match);
+    });
+    const lastOf = (side) => Math.max(0, ...parsed.filter((match) => match.side === side).map((match) => match.number));
+    const lastLower = lastOf("L"), finals = parsed.filter((match) => match.side === "GF");
+    const terminal = finals.length ? finals : parsed.filter((match) => (match.side === "U" && match.number === lastOf("U")) || (match.side === "L" && match.number === lastLower));
+    if (!terminal.length || terminal.some((match) => !match.winner)) return [];
+    if (finals.length) placed.push(String(finals[0].winner), loserOf(finals[0]));
+    else ["U", "L"].forEach((side) => terminal.filter((match) => match.side === side).forEach((match) => placed.push(String(match.winner))));
+    for (let round = lastLower; round >= 1; round--) {
+      parsed.filter((match) => match.side === "L" && match.number === round && match.winner).forEach((match) => placed.push(loserOf(match)));
+    }
+  }
+  return placed.filter((name, index) => real(name) && placed.indexOf(name) === index);
 }
 
 function tournamentInitSheet_(ss, name, headers) {
@@ -799,6 +1061,19 @@ function tournamentValidation_(ss) {
   tournaments.getRange("U2:V").setNumberFormat("yyyy-mm-dd hh:mm");
   tournaments.getRange("W2:W").insertCheckboxes();
   tournaments.getRange("X2:X").setNumberFormat("yyyy-mm-dd hh:mm");
+  // Dropdowns, so a typo cannot silently unlink a tournament from its format or NK phase.
+  const column = (header) => {
+    let index = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf(header) + 1, letters = "";
+    while (index) { letters = String.fromCharCode(65 + (index - 1) % 26) + letters; index = Math.floor((index - 1) / 26); }
+    return tournaments.getRange(letters + "2:" + letters);
+  };
+  const list = (values, help) => SpreadsheetApp.newDataValidation().requireValueInList(values, true).setAllowInvalid(false).setHelpText(help).build();
+  const phases = [].concat(...Object.values(TOURNAMENT.EVENTS));
+  column("Type").setDataValidation(list(TOURNAMENT.TYPES, "Bracket format of this tournament."));
+  column("Event").setDataValidation(list(Object.keys(TOURNAMENT.EVENTS), "Leave empty for a tournament outside an event."));
+  column("Event Phase").setDataValidation(list(phases.filter((phase, index) => phases.indexOf(phase) === index), "Phase ID from the event page on the website."));
+  column("Groups").setDataValidation(SpreadsheetApp.newDataValidation().requireNumberBetween(1, 8).setAllowInvalid(false).setHelpText("Number of groups for Round Robin.").build());
+  column("Advance Count").setDataValidation(list(["2", "4", "8", "16", "32"], "Double elimination only: stop once this many players remain. Empty plays to a grand final."));
   players.getRange("A2:A").setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireNumberBetween(1, 64)
@@ -936,8 +1211,11 @@ function tournamentEventKey_(value) {
 }
 
 // Final placements of a finished single-elimination bracket: champion,
-// runner-up, then players by the round they were knocked out in.
+// runner-up, then players by the round they were knocked out in. Other
+// formats are handled by tournamentPlacementsFor_.
 function tournamentPlacements_(tournamentId) {
+  const format = tournamentBracketFormat_(tournamentById_(tournamentId));
+  if (format !== "single-elimination") return tournamentPlacementsFor_(format, tournamentPublicMatchesFor_(tournamentId));
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
   const matches = tournamentRowsFor_(sheet, tournamentId).map((row) => {
     const found = String(row["Match ID"] || "").match(/-R(\d+)-M\d+$/);
@@ -972,11 +1250,41 @@ function tournamentEventQualifiers_(event, exceptTournamentId) {
   return result;
 }
 
+// Only qualifiers block players who already have a place; later phases such as
+// the group stage are exactly where those players belong.
 function tournamentAssertNotQualified_(tournament, discordId, geoId) {
+  if (Number(tournament["Event Qualifies"] || 0) < 1) return;
   const event = tournamentEventKey_(tournament.Event);
   const found = tournamentEventQualifiers_(event, String(tournament["Tournament ID"] || "")).find((entry) =>
     (discordId && entry.discordId === String(discordId)) || (geoId && entry.geoId === String(geoId).toLowerCase()));
   if (found) throw Error("Je hebt je al geplaatst via " + found.tournament + ". Je hoeft niet meer mee te doen aan een volgende qualifier.");
+}
+
+// Entry From limits who may enter, for example the Last Chance Qualifier:
+// "nk27-oq1:5-8" takes final places 5 to 8 of that tournament, and a bare
+// value is a Discord or GeoGuessr user ID (an invitation). Empty means open.
+function tournamentEntryList_(tournament) {
+  const players = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), result = [];
+  String(tournament["Entry From"] || "").split(/[,;\n]+/).map((item) => item.trim()).filter(Boolean).forEach((item) => {
+    const range = item.match(/^([a-z0-9-]+)\s*:\s*(\d+)(?:\s*-\s*(\d+))?$/i);
+    if (!range) {
+      result.push({discordId: item, geoId: item.toLowerCase()});
+      return;
+    }
+    const id = range[1].toLowerCase(), rows = tournamentRowsFor_(players, id);
+    tournamentPlacements_(id).slice(Number(range[2]) - 1, Number(range[3] || range[2])).forEach((name) => {
+      const row = rows.find((player) => String(player.Player || "") === name) || {};
+      result.push({discordId: String(row["Discord User ID"] || ""), geoId: String(row["GeoGuessr User ID"] || "").toLowerCase()});
+    });
+  });
+  return result;
+}
+
+function tournamentAssertEntryAllowed_(tournament, discordId, geoId) {
+  if (!String(tournament["Entry From"] || "").trim()) return;
+  const discord = String(discordId || ""), geo = String(geoId || "").toLowerCase();
+  const allowed = tournamentEntryList_(tournament).some((entry) => (discord && entry.discordId === discord) || (geo && entry.geoId === geo));
+  if (!allowed) throw Error("Meedoen aan " + (tournament["Tournament Name"] || "dit toernooi") + " kan alleen als je je ervoor geplaatst hebt of uitgenodigd bent.");
 }
 
 /* Strict public allowlist shared by the website and Liquipedia exporter. */
@@ -987,7 +1295,7 @@ function tournamentWebsiteIndex_() {
     const players = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), id)
       .filter((player) => !["Withdrawn", "Disqualified"].includes(String(player.Status)));
     const matches = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id);
-    const final = matches.find((match) => String(match.Round) === "Final");
+    const final = matches.find((match) => ["Final", "Grand Final"].includes(String(match.Round)));
     return tournamentWebsiteSummary_(row, players.length, matches.length, final && final.Winner);
   });
 }
@@ -1009,10 +1317,12 @@ function tournamentWebsiteDetail_(tournamentId) {
   const avatars = tournamentAvatarMap_(players);
   const matches = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id)
     .map((row) => tournamentWebsiteMatch_(row, avatars)).sort((a, b) => a.order - b.order);
-  const final = matches.find((match) => match.round === "Final");
+  const final = matches.find((match) => ["Final", "Grand Final"].includes(match.round));
   return Object.assign(tournamentWebsiteSummary_(tournament, players.length, matches.length, final && final.winner), {
     participants: players.map((row) => tournamentWebsitePlayer_(row, avatars)).sort((a, b) => a.seed - b.seed),
     matches,
+    placements: tournamentPlacements_(id),
+    groups: tournamentBracketFormat_(tournament) === "round-robin" ? tournamentGroupStandings_(matches) : [],
     highlighted_matches: matches.filter((match) => match.highlighted),
     rounds: [...new Set(matches.map((match) => match.round).filter(Boolean))],
     liquipedia_bracket_id: String(tournament["Liquipedia Bracket ID"]),
@@ -1025,7 +1335,7 @@ function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
     ? "completed" : (["live", "in progress", "check-in", "checkin"].includes(status.toLowerCase()) ? "live" : "upcoming");
   return {
     id: String(row["Tournament ID"] || ""), name: String(row["Tournament Name"] || "GeoNederland Tournament"),
-    type: String(row.Type || "Single Elimination"), status, phase,
+    type: String(row.Type || "Single Elimination"), format: tournamentBracketFormat_(row), status, phase,
     maximum_players: Number(row["Maximum Players"] || 0), bracket_size: Number(row["Bracket Size"] || 0),
     default_best_of: Number(row["Default Best Of"] || 3), participant_count: Number(participantCount || 0),
     match_count: Number(matchCount || 0), winner: String(winner || ""),
@@ -1293,6 +1603,7 @@ function tournamentRegister_(payload) {
   ));
   if (conflict) throw Error("That GeoGuessr account or player name is already registered.");
   tournamentAssertNotQualified_(tournament, identity.discordId, geoId);
+  tournamentAssertEntryAllowed_(tournament, identity.discordId, geoId);
   if (!own) {
     const maximum = Math.min(64, Number(tournament["Maximum Players"] || config["Maximum Players"] || 32));
     if (rows.filter((row) => !["Withdrawn", "Disqualified"].includes(String(row.Status))).length >= maximum) throw Error("Tournament registration is full.");
@@ -1313,6 +1624,7 @@ function tournamentCheckIn_(payload) {
   if (!row) throw Error("You are not registered. Use /register first.");
   if (["Withdrawn", "Disqualified"].includes(String(row.Status))) throw Error("This registration cannot be checked in.");
   tournamentAssertNotQualified_(tournamentActive_(), identity.discordId, row["GeoGuessr User ID"]);
+  tournamentAssertEntryAllowed_(tournamentActive_(), identity.discordId, row["GeoGuessr User ID"]);
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), now = new Date();
   sheet.getRange(row.__row, 7, 1, 5).setValues([["Checked In", true, row["Registered At"] || now, now, now]]);
   row.Status = "Checked In"; row["Checked In"] = true; row["Checked In At"] = now;
@@ -1433,14 +1745,22 @@ function tournamentResolve_(match, actor, winner, score) {
   const name = String(winner || "").trim();
   if (![match["Player 1"], match["Player 2"]].includes(name)) throw Error("Winner must match one of the two players.");
   const result = tournamentWriteMatch_(match, {Winner: name, "Series Score": String(score || ""), Status: "Complete"});
-  if (match["Next Match ID"]) {
-    const next = tournamentFindMatch_(match["Next Match ID"]), slot = Number(match["Next Slot"] || 1);
+  const loser = String(match["Player 1"]) === name ? String(match["Player 2"]) : String(match["Player 1"]);
+  // The winner moves on; in double elimination the loser drops to the lower bracket.
+  [[match["Next Match ID"], match["Next Slot"], name], [match["Loser Match ID"], match["Loser Slot"], loser]].forEach(([nextId, slotValue, player]) => {
+    if (!nextId) return;
+    const next = tournamentFindMatch_(nextId), slot = Number(slotValue || 1);
     const field = slot === 2 ? "Player 2" : "Player 1";
     const other = slot === 2 ? next["Player 1"] : next["Player 2"];
     const nextStatus = !tournamentBeforeStart_(next) ? String(next.Status)
       : (other && other !== "TBD" ? "Waiting for players" : "Waiting for opponent");
-    tournamentWriteMatch_(next, {[field]: name, Status: nextStatus});
-  }
+    tournamentWriteMatch_(next, {[field]: player, Status: nextStatus});
+    // Meeting a BYE there is a walkover, just like when the bracket was generated.
+    const pair = [String(next["Player 1"]), String(next["Player 2"])];
+    if (tournamentBeforeStart_(next) && pair.includes("BYE") && !pair.includes("TBD")) {
+      tournamentResolve_(next, "system", pair[0] === "BYE" ? pair[1] : pair[0], "");
+    }
+  });
   tournamentLog_(actor, "resolve", match["Match ID"], name + " " + String(score || ""));
   return result;
 }

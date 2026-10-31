@@ -127,6 +127,11 @@ def match_date(value: Any) -> str:
 
 
 def validate_tournament(tournament: dict[str, Any]) -> int:
+    bracket_format = str(tournament.get("format") or "single-elimination")
+    if bracket_format != "single-elimination":
+        raise TournamentExportError(
+            f"Liquipedia export supports single elimination only; this tournament is {bracket_format}."
+        )
     size = int(tournament.get("bracket_size") or 0)
     if size not in SUPPORTED_BRACKET_SIZES:
         raise TournamentExportError(

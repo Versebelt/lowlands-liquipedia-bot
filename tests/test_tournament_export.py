@@ -71,6 +71,11 @@ class TournamentExportTests(unittest.TestCase):
         with self.assertRaisesRegex(TournamentExportError, "more matches"):
             build_wikicode(invalid)
 
+    def test_rejects_double_elimination_and_groups(self):
+        for bracket_format in ("double-elimination", "round-robin"):
+            with self.assertRaisesRegex(TournamentExportError, "single elimination only"):
+                build_wikicode(dict(TOURNAMENT, format=bracket_format))
+
     def test_rejects_unsupported_bracket_size(self):
         with self.assertRaisesRegex(TournamentExportError, "Unsupported bracket size"):
             build_wikicode(dict(TOURNAMENT, bracket_size=3))

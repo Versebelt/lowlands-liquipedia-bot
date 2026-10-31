@@ -1,0 +1,108 @@
+name: Deploy Apps Script
+
+# Pushes apps-script/Tournament.gs to the Tournament Control project and points
+# the existing web-app deployment at the new version, so the /exec URL stays the
+# same. Only the manifest and Tournament.gs are uploaded: a stray local file can
+# never reach the project.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps-script/**"
+      - ".github/workflows/deploy-apps-script.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apps-script-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Run tests
+        run: |
+          python -m unittest discover -s tests
+          node -e 'new (require("vm").Script)(require("fs").readFileSync("apps-script/Tournament.gs", "utf8"))'
+          node --test tests/tournament_checkin_window.test.js tests/tournament_event_qualify.test.js tests/tournament_formats.test.js
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
+      APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
+      TOURNAMENT_API_URL: ${{ secrets.TOURNAMENT_API_URL }}
+      TOURNAMENT_API_SECRET: ${{ secrets.TOURNAMENT_API_SECRET }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check secrets
+        id: secrets
+        run: |
+          if [ -z "$CLASPRC_JSON" ] || [ -z "$APPS_SCRIPT_ID" ] || [ -z "$APPS_SCRIPT_DEPLOYMENT_ID" ]; then
+            echo "::warning::CLASPRC_JSON, APPS_SCRIPT_ID or APPS_SCRIPT_DEPLOYMENT_ID is missing; Apps Script was not deployed."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push and deploy
+        if: steps.secrets.outputs.skip != 'true'
+        run: |
+          umask 077
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          trap 'rm -f "$HOME/.clasprc.json"' EXIT
+          dir="$RUNNER_TEMP/gas"
+          mkdir -p "$dir"
+          cp apps-script/appsscript.json "$dir/appsscript.json"
+          cp apps-script/Tournament.gs "$dir/Code.js"
+          printf '{"scriptId":"%s","rootDir":""}' "$APPS_SCRIPT_ID" > "$dir/.clasp.json"
+          cd "$dir"
+          npx -y @google/clasp@3.4.1 push --force
+          version=$(npx -y @google/clasp@3.4.1 create-version "commit ${GITHUB_SHA::7}" | grep -o '[0-9]\+' | tail -1)
+          test -n "$version"
+          npx -y @google/clasp@3.4.1 update-deployment "$APPS_SCRIPT_DEPLOYMENT_ID" -V "$version" -d "commit ${GITHUB_SHA::7}"
+          echo "Deployed Apps Script version $version"
+
+      - name: Check the web app
+        if: steps.secrets.outputs.skip != 'true' && env.TOURNAMENT_API_URL != '' && env.TOURNAMENT_API_SECRET != ''
+        run: |
+          # Fails the run when the new version does not answer, e.g. after a syntax error.
+          for attempt in 1 2 3; do
+            if curl -sfL --max-time 60 --get --data-urlencode "action=public_index" --data-urlencode "secret=$TOURNAMENT_API_SECRET" "$TOURNAMENT_API_URL" | grep -q '"ok":true'; then
+              echo "Web app answers."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The web app did not answer with ok:true after the deploy."
+          exit 1
