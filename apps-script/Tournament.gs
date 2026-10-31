@@ -15,7 +15,9 @@ function onOpen() {
     .addSeparator()
     .addItem("Randomize player seeding", "randomizeTournamentSeeding")
     .addItem("Validate player seeding", "validateTournamentSeeding")
-    .addItem("Generate bracket", "generateTournamentBracket")
+    .addItem("Generate preview bracket — all registered", "generateTournamentPreviewBracket")
+    .addItem("Generate official bracket — checked-in", "generateTournamentBracket")
+    .addItem("Run bracket automation now", "runTournamentBracketAutomation")
     .addItem("Sync Public bracket", "syncTournamentPublicSpreadsheet")
     .addSeparator()
     .addItem("Set Discord API secret", "setTournamentApiSecret")
@@ -44,6 +46,7 @@ const TOURNAMENT = {
       "Public Bracket URL", "Stream URL", "Created At", "Archived At", "Rules URL",
       "Registration URL", "Start At", "End At", "Liquipedia Bracket ID",
       "Check-in Opens At", "Check-in Closes At",
+      "Auto-generate Official Bracket", "Official Bracket Generated At", "Bracket Generation Error",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -106,6 +109,7 @@ function setupTournamentSystem() {
   tournamentEnsureLiquipediaBracketIds_();
   tournamentCleanGhostTournamentIds_();
   tournamentMigrateLegacyTournamentIds_();
+  tournamentEnsureAutomationTrigger_();
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
 }
 
@@ -122,9 +126,13 @@ function setupTournamentPublicSpreadsheet() {
 }
 
 function syncTournamentPublicSpreadsheet() {
-  const config = tournamentConfig_(), tournament = tournamentActive_(), id = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
+  tournamentSyncPublicSpreadsheet_(tournamentActive_());
+}
+
+function tournamentSyncPublicSpreadsheet_(tournament) {
+  const config = tournamentConfig_(), id = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
   if (!id) throw Error("The active tournament does not have a Public Spreadsheet ID.");
-  const publicSs = SpreadsheetApp.openById(id), bracket = publicSs.getSheetByName("Bracket") || publicSs.insertSheet("Bracket"), schedule = publicSs.getSheetByName("Schedule") || publicSs.insertSheet("Schedule"), matches = tournamentPublicMatches_();
+  const publicSs = SpreadsheetApp.openById(id), bracket = publicSs.getSheetByName("Bracket") || publicSs.insertSheet("Bracket"), schedule = publicSs.getSheetByName("Schedule") || publicSs.insertSheet("Schedule"), matches = tournamentPublicMatchesFor_(tournament["Tournament ID"]);
   const view = Object.assign({}, config, tournament);
   tournamentRenderPublicBracket_(bracket, view, matches);
   tournamentRenderPublicSchedule_(schedule, view, matches);
@@ -154,7 +162,7 @@ function createTournament() {
   const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
     publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_(),
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
-    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))'];
+    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', true, "", ""];
   tournamentsSheet.appendRow(row);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
@@ -230,7 +238,8 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
   sheet.getRange(1, 1, 1, totalColumns).merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament"))
     .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
-  sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config["Tournament Status"] || "Setup").toUpperCase())
+  const bracketLabel = String(config["Bracket Label"] || "OFFICIAL BRACKET").toUpperCase();
+  sheet.getRange(2, 1, 1, totalColumns).merge().setValue(bracketLabel + "  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
     .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
   tournamentDrawRulesLink_(sheet, totalColumns, config);
 
@@ -279,7 +288,8 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
   sheet.getRange(1, 1, 1, totalColumns).merge().setValue(String(config["Tournament Name"] || "GeoNederland Tournament"))
     .setBackground("#00182f").setFontColor("#ffffff").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("left");
-  sheet.getRange(2, 1, 1, totalColumns).merge().setValue("OFFICIAL BRACKET  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
+  const bracketLabel = String(config["Bracket Label"] || "OFFICIAL BRACKET").toUpperCase();
+  sheet.getRange(2, 1, 1, totalColumns).merge().setValue(bracketLabel + "  ·  " + String(config.Status || config["Tournament Status"] || "Setup").toUpperCase())
     .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("left");
   tournamentDrawRulesLink_(sheet, totalColumns, config);
 
@@ -412,7 +422,7 @@ function tournamentEnsureInitialTournament_() {
     Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
     config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
     config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "", config["Rules URL"] || "",
-    "", "", "", tournamentNewLiquipediaBracketId_(), "", "",
+    "", "", "", tournamentNewLiquipediaBracketId_(), "", "", false, "", "",
   ]);
 }
 
@@ -498,7 +508,11 @@ function tournamentActive_() {
 }
 
 function tournamentUpdateActive_(changes) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS), row = tournamentActive_();
+  return tournamentUpdateRow_(tournamentActive_(), changes);
+}
+
+function tournamentUpdateRow_(row, changes) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   Object.entries(changes).forEach(([header, value]) => {
     const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf(header) + 1;
     if (!column) throw Error("Unknown tournament field: " + header);
@@ -575,10 +589,20 @@ function validateTournamentSeeding() {
 }
 
 function tournamentCheckedInPlayers_() {
+  return tournamentPlayersFor_(tournamentActiveId_(), true);
+}
+
+function tournamentRegisteredPlayers_() {
+  return tournamentPlayersFor_(tournamentActiveId_(), false);
+}
+
+function tournamentPlayersFor_(tournamentId, checkedInOnly) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
-  return tournamentRowsForActive_(sheet).filter(
-    (row) => tournamentBool_(row["Checked In"]) && String(row.Status || "").toLowerCase() !== "withdrawn",
-  );
+  return tournamentRowsFor_(sheet, tournamentId).filter((row) => {
+    const status = String(row.Status || "").toLowerCase();
+    if (["withdrawn", "disqualified"].includes(status)) return false;
+    return !checkedInOnly || tournamentBool_(row["Checked In"]);
+  });
 }
 
 function tournamentValidateSeeding_(players) {
@@ -610,15 +634,8 @@ function tournamentValidateSeeding_(players) {
 
 function generateTournamentBracket() {
   setupTournamentSystem();
-  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_();
-  const players = tournamentValidateSeeding_(tournamentCheckedInPlayers_());
-  const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
-  if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " checked-in players.");
-  const configuredSize = Number(tournament["Bracket Size"] || 0);
-  const bracketSize = configuredSize >= players.length ? configuredSize : Math.pow(2, Math.ceil(Math.log(players.length) / Math.log(2)));
-  if (![2, 4, 8, 16, 32, 64].includes(bracketSize)) throw Error("Bracket size must be 2, 4, 8, 16, 32 or 64.");
-  const matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
-  const oldMatches = tournamentRowsForActive_(matchesSheet);
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_(), matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  const oldMatches = tournamentRowsFor_(matchesSheet, tournament["Tournament ID"]);
   if (oldMatches.length) {
     const choice = SpreadsheetApp.getUi().alert(
       "Replace active bracket?",
@@ -626,13 +643,58 @@ function generateTournamentBracket() {
       SpreadsheetApp.getUi().ButtonSet.YES_NO,
     );
     if (choice !== SpreadsheetApp.getUi().Button.YES) return;
-    for (let index = oldMatches.length - 1; index >= 0; index--) matchesSheet.deleteRow(oldMatches[index].__row);
   }
+  const result = tournamentGenerateOfficialBracket_(tournament, {replaceExisting: true, actor: "sheet"});
+  ss.toast(result.bracketSize + "-player official bracket generated.", "GeoNederland Tournament", 6);
+}
 
+function generateTournamentPreviewBracket() {
+  setupTournamentSystem();
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournament = tournamentActive_();
+  const publicId = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
+  if (!publicId) throw Error("The active tournament does not have a Public Spreadsheet ID.");
+  const definition = tournamentBuildBracket_(tournament, tournamentRegisteredPlayers_(), "registered");
+  const publicSs = SpreadsheetApp.openById(publicId);
+  const preview = publicSs.getSheetByName("Proefbracket") || publicSs.insertSheet("Proefbracket");
+  const view = Object.assign({}, tournamentConfig_(), tournament, {"Bracket Label": "PROEFBRACKET — NIET DEFINITIEF"});
+  const matches = definition.rows.map(tournamentMatchValuesToPublic_);
+  tournamentRenderPublicBracket_(preview, view, matches);
+  tournamentLog_("sheet", "generate_preview_bracket", "", "Generated preview from " + definition.playerCount + " registered players", tournament["Tournament ID"]);
+  ss.toast(definition.bracketSize + "-player preview bracket generated in Proefbracket.", "GeoNederland Tournament", 6);
+}
+
+function tournamentMatchValuesToPublic_(values) {
+  const row = {};
+  TOURNAMENT.HEADERS.MATCHES.forEach((header, index) => row[header] = values[index]);
+  return tournamentPublicMatch_(row);
+}
+
+function tournamentPrepareBracketPlayers_(players, label) {
+  if (players.length < 2) throw Error("At least two " + label + " players are required.");
+  if (players.length > 64) throw Error("A bracket supports at most 64 players.");
+  const seen = {}, problems = [];
+  players.forEach((player) => {
+    const name = String(player.Player || "Unknown"), seed = Number(player.Seed);
+    if (!Number.isInteger(seed) || seed < 1 || seed > 64) problems.push(name + ": missing or invalid seed");
+    else if (seen[seed]) problems.push(name + ": seed " + seed + " is already used by " + seen[seed]);
+    else seen[seed] = name;
+  });
+  if (problems.length) throw Error("Fix Tournament Players seeding:\n\n" + problems.join("\n"));
+  return players.slice().sort((a, b) => Number(a.Seed) - Number(b.Seed))
+    .map((player, index) => Object.assign({}, player, {__bracketSeed: index + 1}));
+}
+
+function tournamentBuildBracket_(tournament, sourcePlayers, label) {
+  const players = tournamentPrepareBracketPlayers_(sourcePlayers, label);
+  const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
+  if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " players.");
+  const configuredSize = Number(tournament["Bracket Size"] || 0);
+  const bracketSize = configuredSize >= players.length ? configuredSize : Math.pow(2, Math.ceil(Math.log(players.length) / Math.log(2)));
+  if (![2, 4, 8, 16, 32, 64].includes(bracketSize)) throw Error("Bracket size must be 2, 4, 8, 16, 32 or 64.");
   const config = tournamentConfig_(), bestOf = Number(tournament["Default Best Of"] || config["Default Best Of"] || 3);
   const presets = [tournament["Preset 1"] || config["Preset 1"] || "", tournament["Preset 2"] || config["Preset 2"] || "", tournament["Preset 3"] || config["Preset 3"] || ""];
   const seeded = {};
-  players.forEach((player) => seeded[Number(player.Seed)] = String(player.Player));
+  players.forEach((player) => seeded[player.__bracketSeed] = String(player.Player));
   const seedOrder = tournamentSeedOrder_(bracketSize), rounds = Math.log(bracketSize) / Math.log(2), rows = [];
   let order = 1, previousCount = bracketSize / 2;
   for (let matchIndex = 0; matchIndex < previousCount; matchIndex++) {
@@ -655,12 +717,23 @@ function generateTournamentBracket() {
     }
   }
   tournamentAdvanceByes_(rows);
+  return {rows, bracketSize, playerCount: players.length};
+}
+
+function tournamentGenerateOfficialBracket_(tournament, options) {
+  const settings = options || {}, id = String(tournament["Tournament ID"]), ss = SpreadsheetApp.getActiveSpreadsheet();
+  const matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), oldMatches = tournamentRowsFor_(matchesSheet, id);
+  if (oldMatches.length && !settings.replaceExisting) throw Error("Er bestaat al een officiële bracket; automatisch overschrijven is geblokkeerd.");
+  const definition = tournamentBuildBracket_(tournament, tournamentPlayersFor_(id, true), "checked-in");
+  for (let index = oldMatches.length - 1; index >= 0; index--) matchesSheet.deleteRow(oldMatches[index].__row);
+  const rows = definition.rows;
   matchesSheet.getRange(matchesSheet.getLastRow() + 1, 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
   tournamentFormat_(ss);
-  tournamentLog_("sheet", "generate_bracket", "", "Generated " + bracketSize + "-player bracket");
-  const publicId = tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"]);
-  if (publicId) syncTournamentPublicSpreadsheet();
-  ss.toast(bracketSize + "-player bracket generated.", "GeoNederland Tournament", 6);
+  const generatedAt = new Date();
+  tournamentUpdateRow_(tournament, {"Official Bracket Generated At": generatedAt, "Bracket Generation Error": ""});
+  tournamentLog_(settings.actor || "automation", "generate_bracket", "", "Generated " + definition.bracketSize + "-player official bracket", id);
+  if (tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"])) tournamentSyncPublicSpreadsheet_(tournament);
+  return Object.assign({generatedAt}, definition);
 }
 
 // A player drawn against a BYE wins that match without playing. Rows are in
@@ -722,6 +795,8 @@ function tournamentValidation_(ss) {
   const tournaments = ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS), players = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), matches = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES);
   tournaments.getRange("R2:S").setNumberFormat("yyyy-mm-dd hh:mm");
   tournaments.getRange("U2:V").setNumberFormat("yyyy-mm-dd hh:mm");
+  tournaments.getRange("W2:W").insertCheckboxes();
+  tournaments.getRange("X2:X").setNumberFormat("yyyy-mm-dd hh:mm");
   players.getRange("A2:A").setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireNumberBetween(1, 64)
@@ -824,8 +899,12 @@ function doPost(e) {
 }
 
 function tournamentPublicMatches_() {
+  return tournamentPublicMatchesFor_(tournamentActiveId_());
+}
+
+function tournamentPublicMatchesFor_(tournamentId) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
-  return tournamentRowsForActive_(sheet).map(tournamentPublicMatch_);
+  return tournamentRowsFor_(sheet, tournamentId).map(tournamentPublicMatch_);
 }
 
 function tournamentPublicMatch_(row) {
@@ -1035,6 +1114,53 @@ function tournamentCheckInWindow_(tournament, now) {
 
 function tournamentCheckInTimeLabel_(date) {
   return Utilities.formatDate(date, "Europe/Amsterdam", "d MMMM yyyy 'om' HH:mm");
+}
+
+function tournamentEnsureAutomationTrigger_() {
+  const handler = "runTournamentBracketAutomation";
+  if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return;
+  ScriptApp.newTrigger(handler).timeBased().everyMinutes(5).create();
+}
+
+function tournamentAutomationDecision_(tournament, now, hasMatches) {
+  if (!tournamentBool_(tournament["Auto-generate Official Bracket"])) return {state: "disabled"};
+  if (tournament["Official Bracket Generated At"]) return {state: "generated"};
+  const openValue = tournament["Check-in Opens At"];
+  const closeValue = tournament["Check-in Closes At"] || (openValue ? tournament["Start At"] : "");
+  if (!closeValue) return {state: "error", error: "Automatische bracket vereist een sluitingstijd voor de check-in."};
+  const window = tournamentCheckInWindow_(tournament, now);
+  if (window.state !== "closed") return {state: "waiting"};
+  if (hasMatches) return {state: "error", error: "Er bestaat al een officiële bracket; automatisch overschrijven is geblokkeerd."};
+  return {state: "generate"};
+}
+
+function runTournamentBracketAutomation(e) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), tournamentsSheet = ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  const matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), now = new Date();
+  let generated = 0, failed = 0;
+  tournamentRows_(tournamentsSheet).forEach((tournament) => {
+    const id = String(tournament["Tournament ID"] || "");
+    try {
+      const hasMatches = tournamentRowsFor_(matchesSheet, id).length > 0;
+      const decision = tournamentAutomationDecision_(tournament, now, hasMatches);
+      if (decision.state === "error") throw Error(decision.error);
+      if (["disabled", "waiting"].includes(decision.state) && tournament["Bracket Generation Error"]) {
+        tournamentUpdateRow_(tournament, {"Bracket Generation Error": ""});
+      }
+      if (decision.state !== "generate") return;
+      tournamentGenerateOfficialBracket_(tournament, {replaceExisting: false, actor: "automation"});
+      generated++;
+    } catch (error) {
+      failed++;
+      const message = String(error.message || error).slice(0, 500);
+      if (String(tournament["Bracket Generation Error"] || "") !== message) {
+        tournamentUpdateRow_(tournament, {"Bracket Generation Error": message});
+        tournamentLog_("automation", "bracket_generation_error", "", message, id);
+      }
+    }
+  });
+  if (!e || !e.triggerUid) ss.toast("Automation complete: " + generated + " generated, " + failed + " with an error.", "GeoNederland Tournament", 8);
+  return {generated, failed};
 }
 
 function tournamentPlayerByDiscord_(discordUserId, discordName, discordDisplayName) {
@@ -1258,8 +1384,8 @@ function tournamentResolve_(match, actor, winner, score) {
   return result;
 }
 
-function tournamentLog_(actor, action, matchId, details) {
+function tournamentLog_(actor, action, matchId, details, tournamentId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet(), sheet = ss.getSheetByName(TOURNAMENT.SHEETS.LOG);
-  if (sheet) sheet.appendRow([new Date(), String(actor || ""), action, matchId || "", details || "", tournamentActiveId_()]);
+  if (sheet) sheet.appendRow([new Date(), String(actor || ""), action, matchId || "", details || "", tournamentId || tournamentActiveId_()]);
 }
 

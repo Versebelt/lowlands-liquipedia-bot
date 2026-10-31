@@ -42,6 +42,15 @@ always-open behaviour. Only checked-in players are eligible for
 bracket generation. `/unregister` keeps the audit trail but changes the player to
 `Withdrawn` instead of deleting the row.
 
+Set `Auto-generate Official Bracket` in the `Tournaments` tab to let the five-minute
+Apps Script trigger create the official bracket once check-in closes. Existing
+official matches are never overwritten automatically. The menu action `Generate
+preview bracket — all registered` renders a clearly labelled `Proefbracket` tab in
+the public spreadsheet without creating match records or affecting Discord,
+website results, or Liquipedia. Every included player needs a unique seed; when
+no-shows create gaps, the official bracket preserves the order and compresses the
+remaining seeds automatically.
+
 ## Manual seeding and bracket generation
 
 Enter a manual number in the `Seed` column for every checked-in player. Seeds

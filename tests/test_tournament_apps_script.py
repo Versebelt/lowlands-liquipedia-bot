@@ -43,7 +43,7 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
             self.assertIn("tournamentClosed_(match)", body, name)
 
     def test_byes_advance_when_the_bracket_is_generated(self):
-        generate = SOURCE.split("function generateTournamentBracket(", 1)[1].split("\n}", 1)[0]
+        generate = SOURCE.split("function tournamentBuildBracket_(", 1)[1].split("function tournamentGenerateOfficialBracket_", 1)[0]
         self.assertIn("tournamentAdvanceByes_(rows)", generate)
 
     def test_public_schedule_shows_amsterdam_time(self):
@@ -66,6 +66,24 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
         self.assertIn("tournamentCheckInWindow_", checkin)
         self.assertIn('window.state === "too_early"', checkin)
         self.assertIn('window.state === "closed"', checkin)
+
+    def test_preview_bracket_is_separate_from_official_matches(self):
+        preview = SOURCE.split("function generateTournamentPreviewBracket(", 1)[1].split(
+            "function tournamentMatchValuesToPublic_", 1
+        )[0]
+        self.assertIn('getSheetByName("Proefbracket")', preview)
+        self.assertIn('"Bracket Label": "PROEFBRACKET — NIET DEFINITIEF"', preview)
+        self.assertIn("tournamentRegisteredPlayers_()", preview)
+        self.assertNotIn("deleteRow", preview)
+        self.assertNotIn("TOURNAMENT.SHEETS.MATCHES", preview)
+
+    def test_automatic_bracket_never_replaces_existing_matches(self):
+        generate = SOURCE.split("function tournamentGenerateOfficialBracket_(", 1)[1].split(
+            "// A player drawn", 1
+        )[0]
+        self.assertIn("oldMatches.length && !settings.replaceExisting", generate)
+        self.assertIn('"Auto-generate Official Bracket"', SOURCE)
+        self.assertIn("everyMinutes(5)", SOURCE)
 
 
 if __name__ == "__main__":
