@@ -503,6 +503,11 @@ function tournamentUpdateActive_(changes) {
   return row;
 }
 
+function tournamentRowsFor_(sheet, tournamentId) {
+  const id = String(tournamentId || "");
+  return tournamentRows_(sheet).filter((row) => String(row["Tournament ID"] || "") === id);
+}
+
 function tournamentRowsForActive_(sheet) {
   const id = tournamentActiveId_();
   return tournamentRows_(sheet).filter((row) => String(row["Tournament ID"] || "") === id);

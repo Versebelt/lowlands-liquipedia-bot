@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -48,6 +49,11 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
     def test_public_schedule_shows_amsterdam_time(self):
         self.assertIn('"Europe/Amsterdam"', SOURCE)
         self.assertIn("tournamentAmsterdamTime_(m.scheduled_at)", SOURCE)
+
+    def test_every_called_tournament_helper_is_defined(self):
+        defined = set(re.findall(r"function (tournament\w+_)\(", SOURCE))
+        called = set(re.findall(r"\b(tournament\w+_)\(", SOURCE))
+        self.assertEqual(called - defined, set())
 
     def test_avatar_cache_and_batching_are_enabled(self):
         self.assertIn("UrlFetchApp.fetchAll", SOURCE)
