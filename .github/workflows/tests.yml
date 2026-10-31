@@ -33,4 +33,4 @@ jobs:
         run: python -m unittest discover -s tests
 
       - name: Run Apps Script check-in tests
-        run: node --test tests/tournament_checkin_window.test.js
+        run: node --test tests/tournament_checkin_window.test.js tests/tournament_event_qualify.test.js

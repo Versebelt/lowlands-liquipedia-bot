@@ -47,6 +47,7 @@ const TOURNAMENT = {
       "Registration URL", "Start At", "End At", "Liquipedia Bracket ID",
       "Check-in Opens At", "Check-in Closes At",
       "Auto-generate Official Bracket", "Official Bracket Generated At", "Bracket Generation Error",
+      "Event", "Event Phase", "Event Qualifies",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -929,6 +930,55 @@ function tournamentPublicMatch_(row) {
   };
 }
 
+// Event and phase keys link a tournament to a multi-stage event such as the NK.
+function tournamentEventKey_(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
+}
+
+// Final placements of a finished single-elimination bracket: champion,
+// runner-up, then players by the round they were knocked out in.
+function tournamentPlacements_(tournamentId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  const matches = tournamentRowsFor_(sheet, tournamentId).map((row) => {
+    const found = String(row["Match ID"] || "").match(/-R(\d+)-M\d+$/);
+    return {round: found ? Number(found[1]) : 0, p1: String(row["Player 1"] || ""), p2: String(row["Player 2"] || ""), winner: String(row.Winner || "")};
+  }).filter((match) => match.round);
+  const last = Math.max(0, ...matches.map((match) => match.round)), finals = matches.filter((match) => match.round === last);
+  const final = finals.length === 1 ? finals[0] : null;
+  if (!final || !final.winner) return [];
+  const placed = [final.winner, final.p1 === final.winner ? final.p2 : final.p1];
+  for (let round = last - 1; round >= 1; round--) {
+    matches.filter((match) => match.round === round && match.winner)
+      .forEach((match) => placed.push(match.p1 === match.winner ? match.p2 : match.p1));
+  }
+  return placed.filter((name, index) => name && !["BYE", "TBD"].includes(name.toUpperCase()) && placed.indexOf(name) === index);
+}
+
+// Players who already earned a place through another tournament of the same
+// event, with their Discord and GeoGuessr IDs from that tournament.
+function tournamentEventQualifiers_(event, exceptTournamentId) {
+  if (!event) return [];
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), players = ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), result = [];
+  tournamentRows_(ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)).forEach((tournament) => {
+    const id = String(tournament["Tournament ID"] || ""), spots = Number(tournament["Event Qualifies"] || 0);
+    if (id === exceptTournamentId || spots < 1 || tournamentEventKey_(tournament.Event) !== event) return;
+    const rows = tournamentRowsFor_(players, id);
+    tournamentPlacements_(id).slice(0, spots).forEach((name) => {
+      const row = rows.find((player) => String(player.Player || "") === name) || {};
+      result.push({player: name, tournament: String(tournament["Tournament Name"] || id),
+        discordId: String(row["Discord User ID"] || ""), geoId: String(row["GeoGuessr User ID"] || "").toLowerCase()});
+    });
+  });
+  return result;
+}
+
+function tournamentAssertNotQualified_(tournament, discordId, geoId) {
+  const event = tournamentEventKey_(tournament.Event);
+  const found = tournamentEventQualifiers_(event, String(tournament["Tournament ID"] || "")).find((entry) =>
+    (discordId && entry.discordId === String(discordId)) || (geoId && entry.geoId === String(geoId).toLowerCase()));
+  if (found) throw Error("Je hebt je al geplaatst via " + found.tournament + ". Je hoeft niet meer mee te doen aan een volgende qualifier.");
+}
+
 /* Strict public allowlist shared by the website and Liquipedia exporter. */
 function tournamentWebsiteIndex_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -984,6 +1034,7 @@ function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
     end_at: tournamentDateIso_(row["End At"]), created_at: tournamentDateIso_(row["Created At"]),
     checkin_opens_at: tournamentDateIso_(row["Check-in Opens At"]),
     checkin_closes_at: tournamentDateIso_(row["Check-in Closes At"] || (row["Check-in Opens At"] && row["Start At"])),
+    event: tournamentEventKey_(row.Event), event_phase: tournamentEventKey_(row["Event Phase"]),
   };
 }
 
@@ -1241,6 +1292,7 @@ function tournamentRegister_(payload) {
     String(row["GeoGuessr User ID"] || "").toLowerCase() === geoId.toLowerCase() || String(row.Player || "").toLowerCase() === player.toLowerCase()
   ));
   if (conflict) throw Error("That GeoGuessr account or player name is already registered.");
+  tournamentAssertNotQualified_(tournament, identity.discordId, geoId);
   if (!own) {
     const maximum = Math.min(64, Number(tournament["Maximum Players"] || config["Maximum Players"] || 32));
     if (rows.filter((row) => !["Withdrawn", "Disqualified"].includes(String(row.Status))).length >= maximum) throw Error("Tournament registration is full.");
@@ -1260,6 +1312,7 @@ function tournamentCheckIn_(payload) {
   const identity = tournamentRegistrationIdentity_(payload), row = tournamentPlayerByDiscord_(identity.discordId, identity.discordName, payload.discord_display_name);
   if (!row) throw Error("You are not registered. Use /register first.");
   if (["Withdrawn", "Disqualified"].includes(String(row.Status))) throw Error("This registration cannot be checked in.");
+  tournamentAssertNotQualified_(tournamentActive_(), identity.discordId, row["GeoGuessr User ID"]);
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), now = new Date();
   sheet.getRange(row.__row, 7, 1, 5).setValues([["Checked In", true, row["Registered At"] || now, now, now]]);
   row.Status = "Checked In"; row["Checked In"] = true; row["Checked In At"] = now;

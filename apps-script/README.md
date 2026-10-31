@@ -89,6 +89,16 @@ the stored link when they need to spectate the match.
 - The central tables retain every historical row and can be filtered by
   `Tournament ID`.
 
+`Event`, `Event Phase` and `Event Qualifies` link tournaments to a multi-stage
+event such as the NK. Example for the first NK 2027 qualifier: `Event` =
+`nk-2027`, `Event Phase` = `oq1` (the phase ID from `content/nk-2027.json` on
+the website) and `Event Qualifies` = `4`. The website then shows this tournament
+on the NK hub automatically. Once its final has a winner, the top
+`Event Qualifies` players count as qualified: they can no longer register for
+or check in to another tournament of the same event (matched on Discord user ID
+or GeoGuessr user ID). Players who registered elsewhere before qualifying are
+not removed automatically, but their check-in is refused.
+
 Brackets support 2, 4, 8, 16, 32 and 64 players. **Create new tournament** offers
 8, 16, 32 and 64 as registration limits; the actual bracket uses the smallest
 suitable power of two unless `Bracket Size` is explicitly overridden. Players
