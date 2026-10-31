@@ -158,12 +158,12 @@ function createTournament() {
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const tournamentsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
-  const newRow = tournamentsSheet.getLastRow() + 1;
+  const newRow = tournamentNextRow_(tournamentsSheet);
   const row = [id, name, "Single Elimination", "Registration", maximum, "", 3, "", "", "",
     publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_(),
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', true, "", ""];
-  tournamentsSheet.appendRow(row);
+  tournamentsSheet.getRange(newRow, 1, 1, row.length).setValues([row]);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
   tournamentSetConfig_("Tournament Status", "Registration");
@@ -417,13 +417,14 @@ function tournamentEnsureInitialTournament_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   if (tournamentRows_(sheet).length) return;
   const config = tournamentConfig_(), id = String(config["Active Tournament ID"] || "practice-1");
-  sheet.appendRow([
+  const values = [
     id, config["Tournament Name"] || "GeoNederland Practice Tournament", "Practice", config["Tournament Status"] || "Setup",
     Number(config["Maximum Players"] || 8), 8, Number(config["Default Best Of"] || 3), config["Preset 1"] || "",
     config["Preset 2"] || "", config["Preset 3"] || "", config["Public Spreadsheet ID"] || "",
     config["Public Bracket URL"] || "", config["Stream URL"] || "", new Date(), "", config["Rules URL"] || "",
     "", "", "", tournamentNewLiquipediaBracketId_(), "", "", false, "", "",
-  ]);
+  ];
+  sheet.getRange(tournamentNextRow_(sheet), 1, 1, values.length).setValues([values]);
 }
 
 // Liquipedia requires bracket IDs of exactly ten letters or digits.
@@ -727,7 +728,7 @@ function tournamentGenerateOfficialBracket_(tournament, options) {
   const definition = tournamentBuildBracket_(tournament, tournamentPlayersFor_(id, true), "checked-in");
   for (let index = oldMatches.length - 1; index >= 0; index--) matchesSheet.deleteRow(oldMatches[index].__row);
   const rows = definition.rows;
-  matchesSheet.getRange(matchesSheet.getLastRow() + 1, 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
+  matchesSheet.getRange(tournamentNextRow_(matchesSheet), 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
   tournamentFormat_(ss);
   const generatedAt = new Date();
   tournamentUpdateRow_(tournament, {"Official Bracket Generated At": generatedAt, "Bracket Generation Error": ""});
@@ -851,6 +852,13 @@ function tournamentRows_(sheet) {
     const identity = row[identityHeader];
     return identity instanceof Date || String(identity || "").trim() !== "";
   });
+}
+
+// Checkbox columns count as filled cells, so getLastRow() points past every
+// empty checkbox. The first free row follows the last row that has an ID.
+function tournamentNextRow_(sheet) {
+  const rows = tournamentRows_(sheet);
+  return rows.length ? Math.max(...rows.map((row) => row.__row)) + 1 : 2;
 }
 
 function tournamentConfig_() {
@@ -1239,7 +1247,7 @@ function tournamentRegister_(payload) {
   }
   const now = new Date(), values = [own ? own.Seed : "", player, geoId, identity.discordName, identity.discordId, country,
     "Registered", false, own && own["Registered At"] || now, "", now, own && own.Notes || "", tournamentActiveId_()];
-  const rowNumber = own ? own.__row : sheet.getLastRow() + 1;
+  const rowNumber = own ? own.__row : tournamentNextRow_(sheet);
   sheet.getRange(rowNumber, 1, 1, TOURNAMENT.HEADERS.PLAYERS.length).setValues([values]);
   tournamentLog_(identity.discordId, own ? "registration_updated" : "registered", "", player + " · " + country);
   return tournamentPlayerPublic_(Object.assign({__row: rowNumber}, Object.fromEntries(TOURNAMENT.HEADERS.PLAYERS.map((header, index) => [header, values[index]]))), !own);

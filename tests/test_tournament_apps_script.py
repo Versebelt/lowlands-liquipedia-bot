@@ -85,6 +85,13 @@ class TournamentAppsScriptContractTests(unittest.TestCase):
         self.assertIn('"Auto-generate Official Bracket"', SOURCE)
         self.assertIn("everyMinutes(5)", SOURCE)
 
+    def test_new_rows_skip_empty_checkbox_rows(self):
+        # Checkbox columns make getLastRow() return the bottom of the sheet.
+        self.assertNotIn("getLastRow() + 1", SOURCE)
+        for name in ("createTournament", "tournamentEnsureInitialTournament_", "tournamentRegister_"):
+            body = SOURCE.split(f"function {name}(", 1)[1].split("\n}", 1)[0]
+            self.assertIn("tournamentNextRow_(", body, name)
+
 
 if __name__ == "__main__":
     unittest.main()
