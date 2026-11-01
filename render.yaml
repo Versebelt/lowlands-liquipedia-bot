@@ -22,3 +22,7 @@ services:
         sync: false
       - key: TOURNAMENT_API_SECRET
         sync: false
+      - key: BROADCAST_CONTROL_SECRET
+        sync: false
+      - key: BROADCAST_TOURNAMENT_ID
+        sync: false

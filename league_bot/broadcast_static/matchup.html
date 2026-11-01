@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Matchup</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .card { position: absolute; left: 160px; right: 160px; top: 170px; height: 700px; display: grid;
+          grid-template-columns: 1fr 260px 1fr; overflow: hidden; }
+  .head { position: absolute; left: 160px; right: 160px; top: 96px; display: flex; justify-content: space-between; align-items: end;
+          font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; }
+  .head .tournament { font-size: 46px; font-weight: 800; letter-spacing: .03em; }
+  .head .round { font-size: 34px; font-weight: 700; color: var(--accent); letter-spacing: .06em; }
+  .player { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding-bottom: 56px; position: relative; }
+  .player .avatar { height: 400px; width: 400px; object-fit: contain; filter: drop-shadow(0 18px 30px rgba(0,0,0,.45)); }
+  .player .noavatar { height: 400px; display: grid; place-items: center; font-family: "Barlow Condensed", sans-serif; font-weight: 800;
+                      font-size: 220px; color: rgba(255,255,255,.12); }
+  .player .name { font-family: "Barlow Condensed", sans-serif; font-weight: 800; font-size: 76px; text-transform: uppercase;
+                  letter-spacing: .02em; max-width: 620px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .meta { display: flex; gap: 16px; align-items: center; font-size: 28px; color: var(--muted); font-weight: 600; }
+  .player .flag { height: 32px; }
+  .player.win .name { color: var(--yellow); }
+  .vs { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+        font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; }
+  .vs .big { font-size: 130px; font-weight: 800; color: var(--accent); line-height: 1; }
+  .vs .series { font-size: 72px; font-weight: 800; }
+  .vs .info { font-size: 28px; color: var(--muted); font-weight: 600; letter-spacing: .1em; text-align: center; }
+  .foot { position: absolute; left: 160px; right: 160px; top: 870px; }
+</style>
+</head>
+<body>
+<div class="head anim"><span class="tournament" data-field="tournament"></span><span class="round" data-field="round"></span></div>
+<div class="card panel anim d1">
+  <div class="player" id="p1">
+    <img class="avatar" data-src="p1_avatar" src="" alt=""><div class="noavatar" id="p1x">?</div>
+    <div class="name" data-field="p1_name"></div>
+    <div class="meta"><img class="flag" data-src="p1_flag" src="" alt=""><span data-field="p1_seed_label"></span></div>
+  </div>
+  <div class="vs">
+    <div class="big">VS</div>
+    <div class="series" data-field="series_label" data-flash></div>
+    <div class="info"><span data-field="format"></span><br><span data-field="when"></span></div>
+  </div>
+  <div class="player" id="p2">
+    <img class="avatar" data-src="p2_avatar" src="" alt=""><div class="noavatar" id="p2x">?</div>
+    <div class="name" data-field="p2_name"></div>
+    <div class="meta"><img class="flag" data-src="p2_flag" src="" alt=""><span data-field="p2_seed_label"></span></div>
+  </div>
+</div>
+<div class="foot accent-bar anim d2"></div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  function render(row) {
+    row.p1_seed_label = row.p1_seed ? "Seed " + row.p1_seed : "";
+    row.p2_seed_label = row.p2_seed ? "Seed " + row.p2_seed : "";
+    row.series_label = row.series_score && row.series_score !== "0-0" ? row.series_score.replace("-", " – ") : "";
+    row.when = row.live ? "Live" : (row.scheduled ? row.scheduled_day + " · " + row.scheduled : "");
+    GN.bind(document.body, row);
+    ["1", "2"].forEach((side) => document.getElementById("p" + side).classList.toggle("win", Boolean(row["p" + side + "_winner"])));
+  }
+  // The "?" placeholder shows whenever an avatar is missing or fails to load.
+  document.querySelectorAll(".player .avatar").forEach((image) => image.addEventListener("gn-image", (event) => {
+    image.nextElementSibling.classList.toggle("hidden", event.detail);
+  }));
+  GN.ready(() => {
+    GN.poll("match", (rows) => render(rows[0] || {}));
+    GN.on("update", (data) => { if (data.p1_name) render(data); });
+  });
+</script>
+</body>
+</html>

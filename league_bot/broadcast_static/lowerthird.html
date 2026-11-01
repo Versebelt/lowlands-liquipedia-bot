@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Lower third</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .lt { position: absolute; left: 120px; bottom: 120px; display: flex; flex-direction: column; align-items: flex-start; }
+  .lt.right { left: auto; right: 120px; align-items: flex-end; }
+  .lt .t { background: var(--panel); padding: 10px 28px 6px; font-family: "Barlow Condensed", sans-serif; font-weight: 800; font-size: 52px;
+           text-transform: uppercase; letter-spacing: .02em; border-radius: 6px 6px 0 0; }
+  .lt .s { background: var(--accent); padding: 6px 28px; font-size: 26px; font-weight: 600; border-radius: 0 0 6px 6px; }
+  .lt .s:empty { display: none; }
+  .pair { position: absolute; left: 120px; right: 120px; bottom: 120px; display: flex; justify-content: space-between; }
+  .pair .lt { position: static; }
+</style>
+</head>
+<body>
+<!-- Default: title/subtitle from the control panel. ?mode=casters shows both casters; ?title=&subtitle= fixes the text. -->
+<div class="lt anim" id="single"><div class="t" id="t"></div><div class="s" id="s"></div></div>
+<div class="pair hidden" id="pair">
+  <div class="lt anim"><div class="t" data-field="caster_1"></div><div class="s">Caster</div></div>
+  <div class="lt right anim d1"><div class="t" data-field="caster_2"></div><div class="s">Caster</div></div>
+</div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  const fixedTitle = GN.params.get("title"), fixedSub = GN.params.get("subtitle");
+  const casters = GN.params.get("mode") === "casters";
+  if (GN.params.get("align") === "right") document.getElementById("single").classList.add("right");
+  function show(title, subtitle) {
+    GN.setText(document.getElementById("t"), title);
+    GN.setText(document.getElementById("s"), subtitle);
+    document.getElementById("single").classList.toggle("hidden", !title);
+  }
+  GN.ready(() => {
+    if (casters) {
+      document.getElementById("single").classList.add("hidden");
+      document.getElementById("pair").classList.remove("hidden");
+      GN.poll("tournament", (rows) => GN.bind(document.body, rows[0] || {}), null, 5);
+    } else if (fixedTitle) {
+      show(fixedTitle, fixedSub || "");
+    } else {
+      GN.poll("control", (rows) => {
+        const row = rows[0] || {};
+        show(row.lower_visible === "0" ? "" : row.lower_title, row.lower_subtitle);
+      }, null, 2);
+    }
+    // CasparCG: CG UPDATE with {"f0": "title", "f1": "subtitle"} or {"title": ..., "subtitle": ...}
+    GN.on("update", (data) => show(data.title || data.f0 || "", data.subtitle || data.f1 || ""));
+  });
+</script>
+</body>
+</html>

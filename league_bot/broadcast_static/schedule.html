@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Schedule</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .frame { position: absolute; left: 360px; right: 360px; top: 120px; padding: 36px 44px 44px; }
+  .title { font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; margin-bottom: 26px; }
+  .title .name { font-size: 54px; font-weight: 800; display: block; }
+  .title .sub { font-size: 28px; color: var(--accent); font-weight: 700; letter-spacing: .12em; }
+  .row { display: grid; grid-template-columns: 120px 1fr 70px 1fr 200px; align-items: center; height: 70px; padding: 0 18px;
+         background: rgba(0,24,47,.7); border-radius: 4px; margin-top: 10px; font-family: "Barlow Condensed", sans-serif; }
+  .row.live { background: linear-gradient(90deg, rgba(244,120,6,.35), rgba(0,24,47,.7)); }
+  .time { font-size: 32px; font-weight: 800; color: var(--accent); }
+  .row.live .time { color: var(--white); }
+  .pl { font-size: 34px; font-weight: 700; text-transform: uppercase; display: flex; align-items: center; gap: 12px; white-space: nowrap; overflow: hidden; }
+  .pl.r { justify-content: flex-end; }
+  .pl .flag { height: 24px; }
+  .vs { text-align: center; color: var(--muted); font-size: 26px; font-weight: 700; }
+  .round { text-align: right; color: var(--muted); font-size: 24px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+</style>
+</head>
+<body>
+<div class="frame panel anim">
+  <div class="title"><span class="name" data-field="tournament"></span><span class="sub">Komende wedstrijden</span></div>
+  <div id="list"></div>
+</div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  function side(row, number, right) {
+    const box = GN.el("div", "pl" + (right ? " r" : "")), flag = GN.el("img", "flag");
+    GN.setImage(flag, row["p" + number + "_flag"]);
+    const name = GN.el("span", "", row["p" + number + "_name"]);
+    right ? box.append(name, flag) : box.append(flag, name);
+    return box;
+  }
+  function render(rows) {
+    const list = document.getElementById("list");
+    list.replaceChildren();
+    rows.forEach((row) => {
+      const line = GN.el("div", "row" + (row.live ? " live" : ""));
+      line.append(GN.el("div", "time", row.live ? "LIVE" : (row.scheduled || "—")), side(row, "1", true), GN.el("div", "vs", "vs"),
+                  side(row, "2", false), GN.el("div", "round", row.round));
+      list.append(line);
+    });
+  }
+  GN.ready(() => {
+    GN.poll("schedule", render, { limit: GN.params.get("limit") || "8" });
+    GN.poll("tournament", (rows) => GN.bind(document.body, rows[0] || {}), null, 15);
+  });
+</script>
+</body>
+</html>

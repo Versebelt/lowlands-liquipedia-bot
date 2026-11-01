@@ -3,6 +3,13 @@
 Automation for Lowlands League Season 2: Liquipedia publishing, scheduled
 Discord reminders, and the interactive Discord bot hosted on Render.
 
+## Livestream graphics
+
+The Render service also serves live broadcast graphics and data feeds under
+`/broadcast/` (HTML overlays for vMix/CasparCG/OBS, JSON/CSV/XML feeds for vMix
+GT Title data sources, Unreal Engine and After Effects, plus an operator control
+panel). See [BROADCAST.md](BROADCAST.md).
+
 ## Liquipedia publishing scope
 
 The publisher accepts only these exact pages:

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GeoNederland broadcast</title>
+<style>
+  :root { --bg: #0b1320; --card: #13203a; --line: #24365a; --text: #eef3fb; --muted: #94a6c2; --accent: #f47806; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { margin: 0 0 4px; } p { color: var(--muted); margin: 0 0 18px; }
+  h2 { margin: 28px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  td { padding: 10px 12px; border-top: 1px solid var(--line); vertical-align: top; }
+  tr:first-child td { border-top: 0; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  code { font-size: 13px; color: #ffd7b0; word-break: break-all; }
+  a { color: var(--accent); }
+  .wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GeoNederland broadcast</h1>
+  <p>Live graphics en datafeeds voor vMix, CasparCG, Unreal Engine en After Effects. Zie <code>BROADCAST.md</code> in de repository voor de handleiding.</p>
+  <a href="overlay/control">→ Regiepaneel openen</a>
+
+  <h2>HTML-overlays (vMix Browser input · CasparCG [HTML] · OBS) — 1920×1080, transparant</h2>
+  <div class="wrap"><table id="overlays"></table></div>
+
+  <h2>Datafeeds (vMix Data Sources → GT Title · UE5 · After Effects)</h2>
+  <div class="wrap"><table id="feeds"></table></div>
+</main>
+<script>
+  const base = new URL(".", window.location.href.replace(/\/?$/, "/")).href;
+  const overlays = [
+    ["scorebug", "Score bovenin tijdens de wedstrijd"], ["matchup", "Full-screen versus-kaart met avatars"],
+    ["bracket", "Volledige bracket (?rounds=Semifinal,Final of ?from=2)"], ["schedule", "Komende en lopende wedstrijden"],
+    ["standings", "Lowlands League stand (?limit=16, ?mode=nmpz)"], ["lowerthird", "Lower third uit het regiepaneel (?mode=casters)"],
+    ["ticker", "Ticker onderin met uitslagen en programma"],
+  ];
+  const feeds = [
+    ["match", "Uitgelichte wedstrijd, één rij (scorebug in GT)"], ["matches", "Alle wedstrijden"], ["bracket", "Wedstrijden met ronde- en slotnummer"],
+    ["schedule", "Komende wedstrijden"], ["participants", "Deelnemers met seed, vlag en avatar"], ["tournament", "Toernooi-info, casters en tickertekst"],
+    ["standings", "Lowlands League stand"],
+  ];
+  function row(table, name, description, links) {
+    const tr = document.createElement("tr"), a = document.createElement("td"), b = document.createElement("td");
+    a.textContent = name;
+    const d = document.createElement("div"); d.textContent = description; b.append(d);
+    links.forEach((url) => { const c = document.createElement("code"), l = document.createElement("a"); l.href = url; l.textContent = url; c.append(l); b.append(c, document.createElement("br")); });
+    tr.append(a, b); document.getElementById(table).append(tr);
+  }
+  overlays.forEach(([name, text]) => row("overlays", name, text, [base + "overlay/" + name]));
+  feeds.forEach(([name, text]) => row("feeds", name, text, ["json", "csv", "xml"].map((ext) => base + "feed/" + name + "." + ext)));
+</script>
+</body>
+</html>

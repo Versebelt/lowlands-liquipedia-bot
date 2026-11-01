@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Broadcast regie</title>
+<style>
+  :root { --bg: #0b1320; --card: #13203a; --line: #24365a; --text: #eef3fb; --muted: #94a6c2; --accent: #f47806; --ok: #35c27c; --bad: #e5484d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  h1 { grid-column: 1 / -1; margin: 0; font-size: 22px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 10px; align-content: start; }
+  section.wide { grid-column: 1 / -1; }
+  h2 { margin: 0 0 4px; font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  label { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
+  input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--line); background: #0d182c; color: var(--text); font: inherit; }
+  textarea { min-height: 70px; resize: vertical; }
+  button { padding: 9px 14px; border-radius: 6px; border: 0; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  .row > button { flex: none; }
+  .score { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; }
+  .score b { font-size: 34px; min-width: 40px; text-align: center; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+  .preview { width: 100%; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; position: relative; background: #3b4a5a; }
+  .preview iframe { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; border: 0; transform-origin: 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Broadcast regie <span id="status">Niet verbonden</span></h1>
+
+  <section>
+    <h2>Toegang</h2>
+    <label>Control secret (BROADCAST_CONTROL_SECRET)<input type="password" id="secret" autocomplete="off"></label>
+    <label>Toernooi-ID (leeg = actieve toernooi)<input id="tournament_id" placeholder="bijv. nk27-oq1"></label>
+    <button id="saveTournament">Toernooi instellen</button>
+  </section>
+
+  <section>
+    <h2>Uitgelichte wedstrijd</h2>
+    <label>Wedstrijd (leeg = automatisch: uitgelicht in de sheet)<select id="match_id"><option value="">Automatisch</option></select></label>
+    <div class="score"><span id="p1name">Speler 1</span><button class="ghost" data-score="p1:-1">−</button><b id="p1score">0</b><button data-score="p1:1">+</button></div>
+    <div class="score"><span id="p2name">Speler 2</span><button class="ghost" data-score="p2:-1">−</button><b id="p2score">0</b><button data-score="p2:1">+</button></div>
+    <div class="row"><button id="saveMatch">Wedstrijd + score live zetten</button><button class="ghost" id="resetScore">Score uit sheet</button></div>
+  </section>
+
+  <section>
+    <h2>Casters & ticker</h2>
+    <div class="row"><label>Caster 1<input id="caster_1"></label><label>Caster 2<input id="caster_2"></label></div>
+    <label>Tickertekst<textarea id="ticker" maxlength="500"></textarea></label>
+    <button id="saveTalent">Opslaan</button>
+  </section>
+
+  <section>
+    <h2>Lower third</h2>
+    <label>Titel<input id="lower_title" maxlength="80"></label>
+    <label>Ondertitel<input id="lower_subtitle" maxlength="120"></label>
+    <div class="row"><button id="showLower">Tonen</button><button class="ghost" id="hideLower">Verbergen</button></div>
+  </section>
+
+  <section class="wide">
+    <h2>Preview scorebug</h2>
+    <div class="preview" id="preview"><iframe src="scorebug?preview=1" title="Scorebug preview"></iframe></div>
+  </section>
+</main>
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const score = { p1: 0, p2: 0 };
+  let matches = [];
+  try { $("secret").value = localStorage.getItem("gn-broadcast-secret") || ""; } catch (error) {}
+  $("secret").addEventListener("change", () => { try { localStorage.setItem("gn-broadcast-secret", $("secret").value); } catch (error) {} });
+
+  function status(text, kind) { $("status").textContent = text; $("status").className = kind || ""; }
+
+  async function send(changes) {
+    try {
+      const response = await fetch("../control", { method: "POST", headers: { "Content-Type": "application/json", "X-Broadcast-Secret": $("secret").value }, body: JSON.stringify(changes) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "HTTP " + response.status);
+      status("Opgeslagen " + new Date().toLocaleTimeString("nl-NL"), "ok");
+      return body;
+    } catch (error) { status(error.message, "bad"); return null; }
+  }
+
+  async function feed(name) {
+    const tournament = $("tournament_id").value.trim();
+    const response = await fetch("../feed/" + name + ".json" + (tournament ? "?tournament=" + encodeURIComponent(tournament) : ""), { cache: "no-store" });
+    if (!response.ok) throw new Error("Feed " + name + ": HTTP " + response.status);
+    return response.json();
+  }
+
+  function showScore() { $("p1score").textContent = score.p1; $("p2score").textContent = score.p2; }
+  function selectedMatch() { return matches.find((row) => row.match_id === $("match_id").value); }
+  function useMatch(row) {
+    if (!row) return;
+    $("p1name").textContent = row.p1_name; $("p2name").textContent = row.p2_name;
+    score.p1 = Number(row.p1_score || 0); score.p2 = Number(row.p2_score || 0); showScore();
+  }
+
+  async function load() {
+    try {
+      const control = (await feed("control"))[0] || {};
+      ["tournament_id", "caster_1", "caster_2", "ticker", "lower_title", "lower_subtitle"].forEach((key) => { $(key).value = control[key] || ""; });
+      matches = await feed("matches");
+      const select = $("match_id");
+      select.replaceChildren(new Option("Automatisch (uitgelicht in sheet)", ""));
+      matches.forEach((row) => select.append(new Option(row.round + " · " + row.p1_name + " vs " + row.p2_name + (row.highlighted ? " 📺" : "") + (row.done ? " ✓" : ""), row.match_id)));
+      select.value = control.match_id || "";
+      useMatch(selectedMatch() || (await feed("match"))[0]);
+      status("Verbonden", "ok");
+    } catch (error) { status(error.message, "bad"); }
+  }
+
+  $("match_id").addEventListener("change", async () => useMatch(selectedMatch() || (await feed("match"))[0]));
+  document.querySelectorAll("[data-score]").forEach((button) => button.addEventListener("click", () => {
+    const [side, delta] = button.dataset.score.split(":");
+    score[side] = Math.max(0, Math.min(99, score[side] + Number(delta)));
+    showScore();
+  }));
+  $("saveMatch").addEventListener("click", () => send({ match_id: $("match_id").value || (matches.find((row) => row.p1_name === $("p1name").textContent && row.p2_name === $("p2name").textContent) || {}).match_id || "", p1_score: String(score.p1), p2_score: String(score.p2) }));
+  $("resetScore").addEventListener("click", async () => { await send({ p1_score: "", p2_score: "" }); load(); });
+  $("saveTournament").addEventListener("click", async () => { await send({ tournament_id: $("tournament_id").value.trim(), match_id: "", p1_score: "", p2_score: "" }); load(); });
+  $("saveTalent").addEventListener("click", () => send({ caster_1: $("caster_1").value, caster_2: $("caster_2").value, ticker: $("ticker").value }));
+  $("showLower").addEventListener("click", () => send({ lower_title: $("lower_title").value, lower_subtitle: $("lower_subtitle").value, lower_visible: "1" }));
+  $("hideLower").addEventListener("click", () => send({ lower_visible: "0" }));
+
+  function fit() { const box = $("preview"); box.querySelector("iframe").style.transform = "scale(" + box.clientWidth / 1920 + ")"; }
+  window.addEventListener("resize", fit); fit();
+  load();
+</script>
+</body>
+</html>

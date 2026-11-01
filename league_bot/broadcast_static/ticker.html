@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Ticker</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 60px; display: flex; background: var(--panel); }
+  .label { flex: none; display: grid; place-items: center; padding: 0 28px; background: var(--accent); font-family: "Barlow Condensed", sans-serif;
+           font-weight: 800; font-size: 30px; text-transform: uppercase; letter-spacing: .06em; }
+  .track { flex: 1; overflow: hidden; position: relative; }
+  .crawl { position: absolute; top: 0; height: 60px; display: flex; align-items: center; white-space: nowrap; will-change: transform;
+           font-family: "Barlow Condensed", sans-serif; font-size: 30px; font-weight: 600; }
+  .crawl span { padding: 0 34px; }
+  .crawl span + span::before { content: "◆"; color: var(--accent); margin-right: 34px; font-size: 18px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="bar anim"><div class="label" data-field="tournament_upper"></div><div class="track"><div class="crawl" id="crawl"></div></div></div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  // Ticker text from the control panel, followed by recent results and upcoming matches. ?speed=120 px per second.
+  const speed = Math.max(30, Number(GN.params.get("speed") || 120));
+  let items = { message: "", results: [], upcoming: [] }, offset = null, lastFrame = 0, pending = null;
+
+  function rebuild() {
+    const texts = [items.message, ...items.results, ...items.upcoming].filter(Boolean);
+    const crawl = document.getElementById("crawl");
+    crawl.replaceChildren(...texts.map((value) => GN.el("span", "", value)));
+  }
+  function frame(now) {
+    const crawl = document.getElementById("crawl"), width = crawl.scrollWidth;
+    if (offset === null) offset = crawl.parentElement.clientWidth * 0.5;
+    offset -= lastFrame ? (now - lastFrame) / 1000 * speed : 0;
+    lastFrame = now;
+    if (offset < -width) {
+      offset = crawl.parentElement.clientWidth;
+      if (pending) { items = pending; pending = null; rebuild(); }
+    }
+    crawl.style.transform = "translateX(" + offset + "px)";
+    requestAnimationFrame(frame);
+  }
+  function queue(change) {
+    const next = Object.assign({}, pending || items, change);
+    if (!document.getElementById("crawl").childElementCount) { items = next; rebuild(); } else pending = next;
+  }
+  GN.ready(() => {
+    GN.poll("tournament", (rows) => { const row = rows[0] || {}; GN.bind(document.body, row); queue({ message: row.ticker }); }, null, 5);
+    GN.poll("matches", (rows) => queue({
+      results: rows.filter((row) => row.done && row.winner).slice(-6).map((row) => row.round + ": " + row.p1_name + " " + row.p1_score + "-" + row.p2_score + " " + row.p2_name),
+    }), null, 15);
+    GN.poll("schedule", (rows) => queue({
+      upcoming: rows.map((row) => (row.live ? "NU LIVE" : (row.scheduled || "Straks")) + ": " + row.p1_name + " vs " + row.p2_name),
+    }), { limit: "5" }, 15);
+    requestAnimationFrame(frame);
+  });
+</script>
+</body>
+</html>

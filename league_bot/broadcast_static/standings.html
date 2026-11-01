@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Standings</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .frame { position: absolute; left: 280px; right: 280px; top: 120px; padding: 34px 44px 38px; }
+  .title { display: flex; justify-content: space-between; align-items: end; margin-bottom: 18px; font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; }
+  .title .name { font-size: 54px; font-weight: 800; }
+  .title .sub { font-size: 26px; color: var(--accent); font-weight: 700; letter-spacing: .12em; }
+  .cols { columns: 2; column-gap: 28px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 0 14px; }
+  .row .rk { flex: none; width: 42px; }
+  .row .pl { flex: 1; min-width: 0; }
+  .row .pt { flex: none; min-width: 100px; }
+  .row { height: 48px; margin-bottom: 6px; background: rgba(0,24,47,.7); border-radius: 4px; break-inside: avoid; font-family: "Barlow Condensed", sans-serif; }
+  .row .rk { font-size: 28px; font-weight: 800; color: var(--accent); }
+  .row .flag { height: 22px; }
+  .row .pl { font-size: 28px; font-weight: 700; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .pt { font-size: 28px; font-weight: 800; text-align: right; }
+  .row.top { background: linear-gradient(90deg, rgba(239,172,31,.25), rgba(0,24,47,.7)); }
+</style>
+</head>
+<body>
+<div class="frame panel anim">
+  <div class="title"><span class="name" id="title">Lowlands League</span><span class="sub" id="sub">Playoff race · Top 16</span></div>
+  <div class="cols" id="list"></div>
+</div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  // ?title=, ?sub= and ?limit= adjust the graphic; ?mode=moving|nm|nmpz shows a mode column instead of points.
+  const mode = (GN.params.get("mode") || "").toLowerCase();
+  if (GN.params.get("title")) GN.setText(document.getElementById("title"), GN.params.get("title"));
+  if (GN.params.get("sub")) GN.setText(document.getElementById("sub"), GN.params.get("sub"));
+  function render(rows) {
+    const list = document.getElementById("list");
+    list.replaceChildren();
+    if (["moving", "nm", "nmpz"].includes(mode)) rows = rows.slice().sort((a, b) => Number(String(b[mode]).replace(/[^0-9.]/g, "")) - Number(String(a[mode]).replace(/[^0-9.]/g, "")));
+    rows.forEach((row, index) => {
+      const line = GN.el("div", "row" + (index < 3 ? " top" : "")), flag = GN.el("img", "flag");
+      GN.setImage(flag, row.flag);
+      line.append(GN.el("span", "rk", mode ? String(index + 1) : row.rank), flag, GN.el("span", "pl", row.player), GN.el("span", "pt", mode ? row[mode] : row.points));
+      list.append(line);
+    });
+  }
+  GN.ready(() => GN.poll("standings", render, { limit: GN.params.get("limit") || "16" }, 30));
+</script>
+</body>
+</html>

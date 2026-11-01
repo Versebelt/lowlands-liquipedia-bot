@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Scorebug</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .bug { position: absolute; top: 36px; left: 0; right: 0; margin: 0 auto; width: fit-content; display: grid;
+         grid-template-columns: 430px 92px 220px 92px 430px; height: 84px; }
+  .side { display: flex; align-items: center; gap: 16px; padding: 0 22px; background: var(--panel); position: relative; overflow: hidden; }
+  .side.left { justify-content: flex-end; border-radius: 6px 0 0 6px; }
+  .side.right { border-radius: 0 6px 6px 0; }
+  .side .name { font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 40px; letter-spacing: .02em;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; text-transform: uppercase; }
+  .side .seed { font-size: 18px; color: var(--muted); font-weight: 600; }
+  .side .flag { height: 30px; }
+  .side.win::after { content: ""; position: absolute; inset: auto 0 0 0; height: 5px; background: var(--yellow); }
+  .score { display: grid; place-items: center; background: var(--accent); font-family: "Barlow Condensed", sans-serif;
+           font-weight: 800; font-size: 60px; color: var(--white); position: relative; }
+  .pips { position: absolute; bottom: -14px; display: flex; gap: 6px; }
+  .pip { width: 18px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.35); }
+  .pip.on { background: var(--yellow); }
+  .mid { display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--navy-deep);
+         font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; }
+  .mid .round { font-size: 26px; font-weight: 700; letter-spacing: .05em; white-space: nowrap; }
+  .mid .fmt { font-size: 18px; color: var(--muted); font-weight: 600; letter-spacing: .1em; }
+  .tag { position: absolute; top: 146px; left: 0; right: 0; margin: 0 auto; width: fit-content; padding: 6px 18px; background: var(--navy-deep);
+         border-radius: 0 0 6px 6px; font-family: "Barlow Condensed", sans-serif; font-size: 20px; font-weight: 600;
+         letter-spacing: .12em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="bug anim" id="bug">
+  <div class="side left" id="p1"><span class="seed" data-field="p1_seed_label"></span><span class="name" data-field="p1_name"></span><img class="flag" data-src="p1_flag" src="" alt=""></div>
+  <div class="score"><span data-field="p1_score" data-flash></span><div class="pips" id="pips1"></div></div>
+  <div class="mid"><span class="round" data-field="round"></span><span class="fmt" data-field="format"></span></div>
+  <div class="score"><span data-field="p2_score" data-flash></span><div class="pips" id="pips2"></div></div>
+  <div class="side right" id="p2"><img class="flag" data-src="p2_flag" src="" alt=""><span class="name" data-field="p2_name"></span><span class="seed" data-field="p2_seed_label"></span></div>
+</div>
+<div class="tag anim d2" data-field="tournament"></div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  function pips(target, score, firstTo) {
+    const box = document.getElementById(target);
+    box.replaceChildren();
+    for (let index = 0; index < Number(firstTo || 0); index++) box.append(GN.el("span", "pip" + (index < Number(score || 0) ? " on" : "")));
+  }
+  function render(row) {
+    row.p1_seed_label = row.p1_seed ? "#" + row.p1_seed : "";
+    row.p2_seed_label = row.p2_seed ? "#" + row.p2_seed : "";
+    GN.bind(document.body, row);
+    pips("pips1", row.p1_score, row.first_to);
+    pips("pips2", row.p2_score, row.first_to);
+    document.getElementById("p1").classList.toggle("win", Boolean(row.p1_winner));
+    document.getElementById("p2").classList.toggle("win", Boolean(row.p2_winner));
+  }
+  GN.ready(() => {
+    GN.poll("match", (rows) => render(rows[0] || {}));
+    GN.on("update", (data) => { if (data.p1_name) render(data); });
+  });
+</script>
+</body>
+</html>

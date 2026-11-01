@@ -1,0 +1,60 @@
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@500;600;700&display=swap");
+
+/* 1920x1080 transparent canvas for vMix Browser input, CasparCG [HTML] and OBS. */
+:root {
+  --navy: #01397a;
+  --navy-deep: #00182f;
+  --orange: #f47806;
+  --blue: #1e9ddb;
+  --yellow: #efac1f;
+  --ink: #0b0f17;
+  --white: #ffffff;
+  --muted: #a9b8cc;
+  --panel: rgba(0, 24, 47, 0.94);
+  --accent: var(--orange);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: transparent;
+  color: var(--white);
+  font-family: "Barlow", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body.preview { background: #3b4a5a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect width='20' height='20' fill='%23465767'/%3E%3Crect x='20' y='20' width='20' height='20' fill='%23465767'/%3E%3C/svg%3E"); }
+
+.cond { font-family: "Barlow Condensed", "Arial Narrow", sans-serif; }
+.upper { text-transform: uppercase; letter-spacing: 0.04em; }
+.flag { height: 1em; width: auto; border-radius: 3px; box-shadow: 0 0 0 1px rgba(255,255,255,.25); vertical-align: middle; }
+.flag[src=""], img[src=""] { display: none; }
+.hidden { display: none !important; }
+
+/* Generic in/out animation driven by body.in / body.out (CasparCG play/stop). */
+.anim { opacity: 0; transform: translateY(24px); transition: opacity .45s var(--ease), transform .6s var(--ease); }
+body.in .anim { opacity: 1; transform: none; }
+body.out .anim { opacity: 0; transform: translateY(-16px); transition-duration: .3s; }
+body.in .anim.d1 { transition-delay: .08s; }
+body.in .anim.d2 { transition-delay: .16s; }
+body.in .anim.d3 { transition-delay: .24s; }
+
+.panel {
+  background: linear-gradient(180deg, rgba(1,57,122,.96), var(--panel));
+  border-radius: 6px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.35);
+}
+.accent-bar { height: 6px; background: linear-gradient(90deg, var(--accent), var(--yellow)); }
+
+.flash { animation: flash 1.2s var(--ease); }
+@keyframes flash {
+  0% { background-color: var(--yellow); color: var(--ink); }
+  100% { }
+}
+
+.stale-dot { position: absolute; right: 8px; top: 8px; width: 8px; height: 8px; border-radius: 50%; background: transparent; }
+body.stale .stale-dot { background: var(--yellow); }

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>Bracket</title>
+<link rel="stylesheet" href="../assets/overlay.css">
+<style>
+  .frame { position: absolute; left: 80px; right: 80px; top: 70px; bottom: 70px; padding: 34px 40px; }
+  .title { display: flex; justify-content: space-between; align-items: end; margin-bottom: 26px;
+           font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; }
+  .title .name { font-size: 50px; font-weight: 800; }
+  .title .sub { font-size: 28px; color: var(--accent); font-weight: 700; letter-spacing: .08em; }
+  .stage { position: absolute; left: 40px; right: 40px; top: 130px; bottom: 34px; }
+  .rounds { display: flex; gap: 26px; height: 100%; transform-origin: top left; }
+  .round { flex: 1 1 0; display: flex; flex-direction: column; min-width: 230px; }
+  .round h3 { font-family: "Barlow Condensed", sans-serif; text-transform: uppercase; font-size: 24px; letter-spacing: .1em;
+              color: var(--muted); margin-bottom: 12px; white-space: nowrap; }
+  .slots { flex: 1; display: flex; flex-direction: column; justify-content: space-around; gap: 10px; }
+  .m { background: rgba(0,24,47,.85); border-left: 5px solid transparent; border-radius: 4px; overflow: hidden; }
+  .m.feat { border-left-color: var(--accent); }
+  .m.live { box-shadow: 0 0 0 2px var(--accent); }
+  .p { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; }
+  .p .n { flex: 1; min-width: 0; }
+  .p .s { flex: none; min-width: 26px; }
+  .p + .p { border-top: 1px solid rgba(255,255,255,.08); }
+  .p .n { font-family: "Barlow Condensed", sans-serif; font-weight: 600; font-size: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .p .s { font-family: "Barlow Condensed", sans-serif; font-weight: 800; font-size: 24px; text-align: right; }
+  .p .flag { height: 18px; }
+  .p.lost { opacity: .45; }
+  .p.won .n, .p.won .s { color: var(--yellow); }
+  .p.tbd .n { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<div class="frame panel anim">
+  <div class="title"><span class="name" data-field="tournament"></span><span class="sub" data-field="current_round"></span></div>
+  <div class="stage"><div class="rounds" id="rounds"></div></div>
+</div>
+<div class="stale-dot"></div>
+<script src="../assets/overlay.js"></script>
+<script>
+  // ?rounds=Quarterfinal,Semifinal,Final limits the columns; ?from=2 starts at round 2.
+  const only = (GN.params.get("rounds") || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+  const from = Number(GN.params.get("from") || 1);
+
+  function player(row, side) {
+    const name = row["p" + side + "_name"], line = GN.el("div", "p");
+    if (row.winner) line.classList.add(row["p" + side + "_winner"] ? "won" : "lost");
+    if (!name || name === "TBD" || name === "BYE") line.classList.add("tbd");
+    const flag = GN.el("img", "flag"); GN.setImage(flag, row["p" + side + "_flag"]);
+    line.append(flag, GN.el("span", "n", name || "TBD"), GN.el("span", "s", row.done || row.live ? row["p" + side + "_score"] : ""));
+    return line;
+  }
+
+  function render(rows) {
+    const columns = new Map();
+    rows.forEach((row) => {
+      if (Number(row.round_index) < from) return;
+      if (only.length && !only.includes(String(row.round).toLowerCase())) return;
+      if (!columns.has(row.round)) columns.set(row.round, []);
+      columns.get(row.round).push(row);
+    });
+    const box = document.getElementById("rounds");
+    box.replaceChildren();
+    columns.forEach((matches, round) => {
+      const column = GN.el("div", "round"), slots = GN.el("div", "slots");
+      column.append(GN.el("h3", "", round));
+      matches.forEach((row) => {
+        const card = GN.el("div", "m" + (row.highlighted ? " feat" : "") + (row.live && !row.done ? " live" : ""));
+        card.append(player(row, "1"), player(row, "2"));
+        slots.append(card);
+      });
+      column.append(slots);
+      box.append(column);
+    });
+    // Shrink large brackets (double elimination, 32+ players) to fit the frame.
+    box.style.transform = "none";
+    const stage = box.parentElement, scale = Math.min(1, stage.clientWidth / box.scrollWidth, stage.clientHeight / box.scrollHeight);
+    if (scale < 1) { box.style.transform = "scale(" + scale + ")"; box.style.width = (100 / scale) + "%"; box.style.height = (100 / scale) + "%"; }
+  }
+
+  GN.ready(() => {
+    GN.poll("bracket", render);
+    GN.poll("tournament", (rows) => GN.bind(document.body, rows[0] || {}), null, 15);
+  });
+</script>
+</body>
+</html>

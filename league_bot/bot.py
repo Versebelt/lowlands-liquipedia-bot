@@ -12,6 +12,7 @@ import discord
 from aiohttp import ClientSession, ClientTimeout, web
 from discord import app_commands
 
+from . import broadcast
 from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
 from .sheets import DEFAULT_SPREADSHEET_ID, PublicSheet, SheetError, display_number
 from .tournament import (
@@ -1768,6 +1769,7 @@ async def run() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application()
     app.router.add_get("/health", health)
+    broadcast.setup_routes(app, broadcast.BroadcastData(client.sheet, client.tournament))
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", "8080"))).start()
