@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from reminders.send import Config, ReminderError, build_payload, parse_players, resolve_players
+from reminders.send import Config, ReminderError, build_payload, build_payloads, parse_players, resolve_players
 
 
 class ReminderTests(unittest.TestCase):
@@ -45,6 +45,25 @@ class ReminderTests(unittest.TestCase):
         self.assertIn("2 seed(s) remaining", payload["content"])
         self.assertEqual(payload["allowed_mentions"]["users"], ["11"])
         self.assertEqual(payload["allowed_mentions"]["roles"], [])
+
+    def test_long_sunday_reminder_is_split_without_dropping_mentions(self):
+        players = [
+            {"player": f"Player {i}", "user_id": str(100000000000000000 + i), "missing": 6}
+            for i in range(45)
+        ]
+        payloads = build_payloads("sunday", 8, self.config(), players)
+        self.assertGreater(len(payloads), 1)
+        self.assertTrue(all(len(payload["content"]) <= 2000 for payload in payloads))
+        mentioned = [
+            user
+            for payload in payloads
+            for user in payload["allowed_mentions"]["users"]
+        ]
+        self.assertEqual(mentioned, [p["user_id"] for p in players])
+        self.assertTrue(all("23:59" in p["content"] for p in payloads))
+
+    def test_no_incomplete_players_produces_no_sunday_messages(self):
+        self.assertEqual(build_payloads("sunday", 8, self.config(), []), [])
 
     def test_friday_payload_mentions_generic_role(self):
         payload = build_payload("friday", 4, self.config(), [])
