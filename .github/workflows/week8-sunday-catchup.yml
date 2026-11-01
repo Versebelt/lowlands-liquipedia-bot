@@ -1,0 +1,29 @@
+name: Week 8 Sunday reminder catch-up
+on:
+  push:
+    paths:
+      - .github/workflows/week8-sunday-catchup.yml
+permissions:
+  contents: read
+concurrency:
+  group: discord-seed-reminders
+  cancel-in-progress: false
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+      DISCORD_CHANNEL_ID: ${{ secrets.DISCORD_CHANNEL_ID }}
+      DISCORD_GENERIC_ROLE_ID: ${{ secrets.DISCORD_GENERIC_ROLE_ID }}
+      LOWLANDS_PUBLIC_SHEET_URL: https://docs.google.com/spreadsheets/d/15lCX6ljpsGh6bwzHZcctb24DIn-r4wqRGt6gZtLE_k4
+      INPUT_PLAYERS_JSON: '[{"player":"Ayli","discord":"Aylivado","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Annabel","discord":"annabellsprout","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"GramenMystace","discord":"gramenmystace","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Slam4","discord":"slam4","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"TheJellyMan","discord":"thejellyman.","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"koendew","discord":"koendew","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Poezenmormel","discord":"Poezenmormel","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Lua","discord":"pawlover","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"SanderFMC","discord":"sanderti_51912","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"BootyBread","discord":"booty_bread","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Vitaleon","discord":"Donkerbruine Dakpan","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"rock","discord":"capybab","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Rrick378","discord":"Rrick378","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"DatDaniel","discord":"datdaniel","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"I am fabulous","discord":"iamfabulous0371","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"daangast","discord":"daangast","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"YouriYolo","discord":"YouriYolo","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Robijn","discord":"itsmerobinnn","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Grategonalop","discord":"Grategonalop","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Rob","discord":"confuse8894","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"IrisSophie","discord":"Pokkebaas","missing":2,"missingChallenges":[5,6]},{"player":"BliksemPiebe","discord":"Hartger","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Abys","discord":"a8ys","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Consus","discord":"Consus","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Matedu","discord":"Matedu","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"lennyh","discord":"lennyharmony","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Nebaj","discord":"nebaj","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"malfunctionn","discord":"malfunctionn","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"Cosmik","discord":"cosmik01","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"metamagnet","discord":"jellerueben","missing":6,"missingChallenges":[1,2,3,4,5,6]},{"player":"rziv","discord":"rziv.","missing":2,"missingChallenges":[1,2]},{"player":"Avandy","discord":"Avandy","missing":6,"missingChallenges":[1,2,3,4,5,6]}]'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Send Week 8 reminder (one-time catch-up)
+        run: python -m reminders.send --kind sunday --week 8 --players-json "$INPUT_PLAYERS_JSON"
