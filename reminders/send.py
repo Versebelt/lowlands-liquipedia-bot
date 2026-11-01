@@ -280,6 +280,42 @@ def build_payload(
     }
 
 
+def build_payloads(
+    kind: str,
+    week: int,
+    config: Config,
+    resolved_players: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Build messages without dropping player mentions at Discord's 2000-char limit."""
+    if kind != "sunday":
+        return [build_payload(kind, week, config, resolved_players)]
+    if not resolved_players:
+        return []
+
+    batches: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    for player in resolved_players:
+        candidate = current + [player]
+        # Each batch has its own mentions, player list and deadline.
+        try:
+            build_payload("sunday", week, config, candidate)
+        except ReminderError as exc:
+            if "maximum is 2000" not in str(exc):
+                raise
+            if not current:
+                raise ReminderError(
+                    f"Player {player.get('player', 'unknown')!r} cannot fit in a Discord reminder."
+                ) from exc
+            batches.append(current)
+            current = [player]
+            build_payload("sunday", week, config, current)
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return [build_payload("sunday", week, config, batch) for batch in batches]
+
+
 def parse_players(value: str) -> list[dict[str, object]]:
     try:
         players = json.loads(value or "[]")
@@ -308,19 +344,35 @@ def main() -> int:
             if args.kind == "sunday"
             else []
         )
-        payload = build_payload(args.kind, args.week, config, resolved)
-        if args.dry_run:
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if args.kind == "sunday" and not players:
+            print(
+                f"Sunday reminder skipped: week={args.week}, "
+                "no incomplete players supplied; no Discord message sent."
+            )
             return 0
-        discord_request(
-            config,
-            "POST",
-            f"/channels/{config.channel_id}/messages",
-            payload,
+        payloads = build_payloads(args.kind, args.week, config, resolved)
+        print(
+            f"Reminder prepared: kind={args.kind}, week={args.week}, "
+            f"players={len(resolved)}, messages={len(payloads)}"
         )
+        if args.dry_run:
+            print(json.dumps(payloads, ensure_ascii=False, indent=2))
+            return 0
+        for index, payload in enumerate(payloads, 1):
+            discord_request(
+                config,
+                "POST",
+                f"/channels/{config.channel_id}/messages",
+                payload,
+            )
+            print(
+                f"Discord message {index}/{len(payloads)} sent: "
+                f"characters={len(str(payload['content']))}, "
+                f"mentions={len(payload['allowed_mentions']['users'])}"
+            )
         print(
             f"Discord reminder sent: kind={args.kind}, week={args.week}, "
-            f"individual_mentions={len(resolved)}"
+            f"individual_mentions={len(resolved)}, messages={len(payloads)}"
         )
         return 0
     except ReminderError as exc:
