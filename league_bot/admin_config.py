@@ -20,6 +20,8 @@ class AdminConfig:
     friday_time: str = "20:00"
     sunday_time: str = "10:00"
     timezone: str = "Europe/Amsterdam"
+    # Tournament announcements (now on stream, results, starting soon) in the announcement channel.
+    tournament_announcements: bool = True
 
 
 def encode_topic(config: AdminConfig) -> str:

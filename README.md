@@ -227,6 +227,31 @@ after both players are ready. Player 2 joins through that link. Administrators
 and casters can use the stored party link for spectating. The API rejects party
 links submitted by Player 2; either participant may still submit a result link.
 
+### Tournament announcements
+
+Every minute the bot reads the active tournament (`action=bracket`) and posts each moment once in the configured
+announcement channel, without mentions, party links or Discord IDs:
+
+- **Now on stream** when a highlighted match is released (or goes live), with the match or tournament `Stream URL`.
+- **Result** when a match is resolved, winner first, plus the winner's next opponent when that is known.
+- **Starting soon** fifteen minutes before `Scheduled At`.
+
+The first poll after a restart is a baseline, so a restart never repeats old messages. Admins switch this with
+`/tournamentannouncements true|false` (or `!toernooimeldingen aan|uit`); the setting lives in the same private
+configuration channel as the reminders. Anyone can list the completed matches with `/results`, `/uitslagen`,
+`!results` or `!uitslagen`.
+
+### GeoNederland broadcast app
+
+The broadcast app (private repository `Versebelt/geonederland-broadcast`) uses the same Apps Script and secret:
+
+- `GET action=broadcast_tournament`: the public tournament detail plus `geoguessr_ids` (player name to GeoGuessr
+  user ID), so the broadcast puts each player on the right side. Never used by the website.
+- `POST action=game`: one played game in `Tournament Games` (mode, winner, remaining HP, summary link, a short
+  note), status `Confirmed (broadcast)`; sending the same game again replaces its row.
+- `POST action=score`: the live series score while the match is running; refused once the match is closed.
+- It also uses `highlight`, `release` and `resolve`, exactly like the admin commands above.
+
 ### Tournament Liquipedia test export
 
 `.github/workflows/publish-tournament-test.yml` reads one tournament from the
