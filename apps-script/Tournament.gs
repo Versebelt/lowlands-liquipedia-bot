@@ -1165,6 +1165,9 @@ function doGet(e) {
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
     if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(), updated_at: tournamentWebsiteUpdatedAt_()});
     if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id)});
+    // GeoNederland broadcast app: the public detail plus GeoGuessr user IDs, so the broadcast can put the right
+    // players on the right side. Still behind the shared secret; never shown on the website.
+    if (action === "broadcast_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)});
     throw Error("Unknown action: " + action);
   } catch (error) {
     return tournamentJson_({ok: false, error: String(error.message || error)});
@@ -1563,6 +1566,8 @@ function tournamentHandleAction_(payload) {
   if (action === "release") return tournamentRelease_(match, payload.actor || payload.discord_user_id);
   if (action === "highlight") return tournamentHighlight_(match, payload.actor || payload.discord_user_id, payload.highlighted);
   if (action === "resolve") return tournamentResolve_(match, payload.actor || payload.discord_user_id, payload.winner, payload.score);
+  if (action === "game") return tournamentBroadcastGame_(match, payload);
+  if (action === "score") return tournamentBroadcastScore_(match, payload);
   throw Error("Unknown tournament action: " + action);
 }
 
@@ -1763,6 +1768,61 @@ function tournamentResolve_(match, actor, winner, score) {
   });
   tournamentLog_(actor, "resolve", match["Match ID"], name + " " + String(score || ""));
   return result;
+}
+
+/* ========================================================================== */
+/* GeoNederland broadcast app: admin-only actions behind the shared secret.    */
+/* The broadcast sees every game live, so it records game results and the     */
+/* live series score instead of waiting for result links ("Pending review").  */
+/* ========================================================================== */
+
+const TOURNAMENT_BROADCAST_ACTOR = "GeoNederland broadcast";
+
+function tournamentBroadcastIds_(tournamentId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
+  const ids = {};
+  tournamentRowsFor_(sheet, tournamentId).forEach((row) => {
+    const player = String(row.Player || "").trim();
+    if (!player || !String(row["GeoGuessr User ID"] || "").trim()) return;
+    try {
+      ids[player] = tournamentGeoGuessrUserId_(row["GeoGuessr User ID"]);
+    } catch (error) {
+      // An invalid profile link in the sheet: leave this player out instead of failing the whole response.
+    }
+  });
+  return ids;
+}
+
+function tournamentBroadcastScore_(match, payload) {
+  const score = String(payload.score || "").trim();
+  if (!/^\d{1,2}-\d{1,2}$/.test(score)) throw Error("Score must look like 1-0.");
+  if (["Complete", "Disqualified"].includes(String(match.Status))) throw Error("Match is already closed.");
+  tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "score", match["Match ID"], score);
+  return tournamentWriteMatch_(match, {"Series Score": score});
+}
+
+function tournamentBroadcastGame_(match, payload) {
+  const game = Number(payload.game);
+  if (!Number.isInteger(game) || game < 1 || game > 9) throw Error("Game must be a number from 1 to 9.");
+  const winner = String(payload.winner || "").trim();
+  if (winner && ![match["Player 1"], match["Player 2"]].includes(winner)) throw Error("Winner must match one of the two players.");
+  const gameId = String(payload.game_id || "").trim();
+  if (gameId && !/^[A-Za-z0-9-]{8,64}$/.test(gameId)) throw Error("Invalid GeoGuessr game ID.");
+  const hp = (value) => (value === "" || value === null || value === undefined || !Number.isFinite(Number(value)) ? "" : Math.max(0, Math.round(Number(value))));
+  const values = [
+    new Date(), match["Match ID"], game, String(payload.mode || "").slice(0, 20),
+    gameId ? "https://www.geoguessr.com/duels/" + gameId + "/summary" : "", TOURNAMENT_BROADCAST_ACTOR,
+    hp(payload.player1_hp), hp(payload.player2_hp), winner, "Confirmed (broadcast)",
+    String(payload.notes || "").slice(0, 300), tournamentActiveId_(),
+  ];
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.GAMES);
+  // The same game sent twice (reconnect, restart) replaces its row instead of adding one.
+  const existing = tournamentRowsForActive_(sheet).find((row) => String(row["Match ID"]) === String(match["Match ID"])
+    && Number(row.Game) === game && String(row["Submitted By"]) === TOURNAMENT_BROADCAST_ACTOR);
+  if (existing) sheet.getRange(existing.__row, 1, 1, values.length).setValues([values]);
+  else sheet.appendRow(values);
+  tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "game", match["Match ID"], "Game " + game + ": " + (winner || "draw"));
+  return {match_id: String(match["Match ID"]), game, winner};
 }
 
 function tournamentLog_(actor, action, matchId, details, tournamentId) {
