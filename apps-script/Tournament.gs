@@ -1565,7 +1565,10 @@ function tournamentHandleAction_(payload) {
   if (action === "result") return tournamentSubmitResult_(match, payload.discord_user_id, payload.url, payload.discord_name, payload.discord_display_name);
   if (action === "release") return tournamentRelease_(match, payload.actor || payload.discord_user_id);
   if (action === "highlight") return tournamentHighlight_(match, payload.actor || payload.discord_user_id, payload.highlighted);
-  if (action === "resolve") return tournamentResolve_(match, payload.actor || payload.discord_user_id, payload.winner, payload.score);
+  if (action === "resolve") {
+    tournamentBroadcastExpect_(match, payload);
+    return tournamentResolve_(match, payload.actor || payload.discord_user_id, payload.winner, payload.score);
+  }
   if (action === "game") return tournamentBroadcastGame_(match, payload);
   if (action === "score") return tournamentBroadcastScore_(match, payload);
   throw Error("Unknown tournament action: " + action);
@@ -1793,10 +1796,25 @@ function tournamentBroadcastIds_(tournamentId) {
   return ids;
 }
 
+/**
+ * Compare-and-set: with expected_score the write only goes through when the sheet still holds that score. This stops
+ * an old retry, a second operator or the broadcast from silently overwriting a manual correction (last write wins).
+ * Without expected_score nothing changes (Discord commands keep working as before).
+ */
+function tournamentBroadcastExpect_(match, payload) {
+  if (payload.expected_score === undefined || payload.expected_score === null) return;
+  const normal = (value) => String(value || "").replace(/\s+/g, "").replace(/[–:]/g, "-") || "0-0";
+  const current = normal(match["Series Score"]);
+  if (current !== normal(payload.expected_score)) {
+    throw Error("Conflict: Series Score in the sheet is " + current + ", expected " + normal(payload.expected_score) + ".");
+  }
+}
+
 function tournamentBroadcastScore_(match, payload) {
   const score = String(payload.score || "").trim();
   if (!/^\d{1,2}-\d{1,2}$/.test(score)) throw Error("Score must look like 1-0.");
   if (["Complete", "Disqualified"].includes(String(match.Status))) throw Error("Match is already closed.");
+  tournamentBroadcastExpect_(match, payload);
   tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "score", match["Match ID"], score);
   return tournamentWriteMatch_(match, {"Series Score": score});
 }

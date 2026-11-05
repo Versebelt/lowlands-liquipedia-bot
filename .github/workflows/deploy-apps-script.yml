@@ -57,7 +57,7 @@ jobs:
         run: |
           python -m unittest discover -s tests
           node -e 'new (require("vm").Script)(require("fs").readFileSync("apps-script/Tournament.gs", "utf8"))'
-          node --test tests/tournament_checkin_window.test.js tests/tournament_event_qualify.test.js tests/tournament_formats.test.js
+          node --test tests/tournament_checkin_window.test.js tests/tournament_event_qualify.test.js tests/tournament_formats.test.js tests/tournament_broadcast.test.js
 
   deploy:
     needs: test
