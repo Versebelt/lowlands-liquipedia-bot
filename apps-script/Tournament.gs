@@ -1085,6 +1085,8 @@ function tournamentValidation_(ss) {
   players.getRange("H2:H").insertCheckboxes();
   matches.getRange("J2:M").insertCheckboxes();
   matches.getRange("T2:T").setNumberFormat("yyyy-mm-dd hh:mm");
+  // Series Score as plain text: otherwise Sheets turns "2-1" into a date (2 January) and the score is lost.
+  matches.getRange(2, TOURNAMENT.HEADERS.MATCHES.indexOf("Series Score") + 1, matches.getMaxRows() - 1, 1).setNumberFormat("@");
   matches.getRange("N2:N").setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList([
     "Waiting for opponent", "Waiting for players", "Waiting for broadcast", "Ready to start", "Live", "Pending result", "Complete", "On hold", "Disqualified",
   ], true).build());
@@ -1203,7 +1205,7 @@ function tournamentPublicMatch_(row) {
     highlighted: tournamentBool_(row.Highlighted), player1_ready: tournamentBool_(row["Player 1 Ready"]),
     player2_ready: tournamentBool_(row["Player 2 Ready"]), admin_released: tournamentBool_(row["Admin Released"]),
     status: String(row.Status || ""), party_url: String(row["Party URL"] || ""),
-    series_score: String(row["Series Score"] || "0-0"), winner: String(row.Winner || ""),
+    series_score: tournamentScoreText_(row["Series Score"]) || "0-0", winner: String(row.Winner || ""),
     scheduled_at: tournamentDateIso_(row["Scheduled At"]), stream_url: String(row["Stream URL"] || ""),
   };
 }
@@ -1368,7 +1370,7 @@ function tournamentWebsiteMatch_(row, avatars) {
     player1, player2, player1_avatar_url: String((avatars || {})[player1] || ""),
     player2_avatar_url: String((avatars || {})[player2] || ""), best_of: Number(row["Best Of"] || 3),
     highlighted: tournamentBool_(row.Highlighted), status: String(row.Status || ""),
-    series_score: String(row["Series Score"] || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
+    series_score: (tournamentScoreText_(row["Series Score"]) || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
     winner: String(row.Winner || ""), scheduled_at: tournamentDateIso_(row["Scheduled At"]),
     stream_url: tournamentWebsiteUrl_(row["Stream URL"]), updated_at: tournamentDateIso_(row["Updated At"]),
   };
@@ -1669,7 +1671,10 @@ function tournamentWriteMatch_(match, changes) {
   Object.entries(changes).forEach(([name, value]) => {
     const column = headers.indexOf(name) + 1;
     if (!column) throw Error("Unknown match field: " + name);
-    match.__sheet.getRange(match.__row, column).setValue(value);
+    const cell = match.__sheet.getRange(match.__row, column);
+    // A score like "2-1" would otherwise be stored as a date; text format first, then the value.
+    if (name === "Series Score") cell.setNumberFormat("@");
+    cell.setValue(value);
     match[name] = value;
   });
   const updatedColumn = headers.indexOf("Updated At") + 1;
@@ -1797,13 +1802,25 @@ function tournamentBroadcastIds_(tournamentId) {
 }
 
 /**
+ * Series Score as text. A score typed or written as "2-1" in a cell without text format comes back from getValues()
+ * as a date (2 January in a d-m locale, 1 February in en_US): turn it back into the score the user meant.
+ */
+function tournamentScoreText_(value) {
+  if (Object.prototype.toString.call(value) !== "[object Date]" || isNaN(value.getTime())) return String(value === null || value === undefined ? "" : value).trim();
+  let locale = "";
+  try { locale = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetLocale() || ""; } catch (error) { locale = ""; }
+  const day = value.getDate(), month = value.getMonth() + 1;
+  return /^en_US/i.test(locale) ? month + "-" + day : day + "-" + month;
+}
+
+/**
  * Compare-and-set: with expected_score the write only goes through when the sheet still holds that score. This stops
  * an old retry, a second operator or the broadcast from silently overwriting a manual correction (last write wins).
  * Without expected_score nothing changes (Discord commands keep working as before).
  */
 function tournamentBroadcastExpect_(match, payload) {
   if (payload.expected_score === undefined || payload.expected_score === null) return;
-  const normal = (value) => String(value || "").replace(/\s+/g, "").replace(/[–:]/g, "-") || "0-0";
+  const normal = (value) => tournamentScoreText_(value).replace(/\s+/g, "").replace(/[–:]/g, "-") || "0-0";
   const current = normal(match["Series Score"]);
   if (current !== normal(payload.expected_score)) {
     throw Error("Conflict: Series Score in the sheet is " + current + ", expected " + normal(payload.expected_score) + ".");

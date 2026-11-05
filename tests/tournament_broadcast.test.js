@@ -19,6 +19,7 @@ function sheet(name, headers, rows) {
       getValues: () => values.slice(row - 1, row - 1 + numRows).map((line) => line.slice(col - 1, col - 1 + numCols)),
       getDisplayValues: () => values.slice(row - 1, row - 1 + numRows).map((line) => line.slice(col - 1, col - 1 + numCols).map(String)),
       setValue: (value) => { values[row - 1][col - 1] = value; },
+      setNumberFormat: () => {},
       setValues: (block) => block.forEach((line, i) => line.forEach((value, j) => { values[row - 1 + i][col - 1 + j] = value; })),
     }),
   };
@@ -79,6 +80,19 @@ test("live series score: only valid scores, never on a closed match", () => {
   assert.equal(matches.values[1][H.HEADERS.MATCHES.indexOf("Series Score")], "1-0");
   assert.throws(() => context.tournamentHandleAction_({action: "score", match_id: "cup-R1-M1", score: "abc"}), /Score must/);
   assert.throws(() => context.tournamentHandleAction_({action: "score", match_id: "cup-R1-M2", score: "1-0"}), /already closed/);
+});
+
+test("a score that Sheets turned into a date still reads as the score", () => {
+  const {context, sheets, H} = load();
+  // vm context has its own Date; build the date inside it, like getValues() would return it.
+  const date = vm.runInContext("new Date(2026, 0, 1)", context);
+  sheets[H.SHEETS.MATCHES].values[1][H.HEADERS.MATCHES.indexOf("Series Score")] = date;
+  context.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: (name) => sheets[name], getSpreadsheetLocale: () => "nl_NL"});
+  assert.equal(context.tournamentScoreText_(date), "1-1");
+  context.tournamentHandleAction_({action: "score", match_id: "cup-R1-M1", score: "2-1", expected_score: "1-1"});
+  assert.equal(sheets[H.SHEETS.MATCHES].values[1][H.HEADERS.MATCHES.indexOf("Series Score")], "2-1");
+  context.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: (name) => sheets[name], getSpreadsheetLocale: () => "en_US"});
+  assert.equal(context.tournamentScoreText_(vm.runInContext("new Date(2026, 1, 1)", context)), "2-1");
 });
 
 test("expected_score: a stale or conflicting write is refused instead of overwriting", () => {
