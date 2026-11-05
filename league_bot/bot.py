@@ -14,7 +14,14 @@ from aiohttp import ClientSession, ClientTimeout, web
 from discord import app_commands
 
 from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
-from .announcements import announcements as tournament_announcements, baseline as announcement_baseline, results_text
+from .announcements import (
+    HIDDEN_PREFIX,
+    NOT_PUBLIC,
+    announcements as tournament_announcements,
+    baseline as announcement_baseline,
+    is_hidden,
+    results_text,
+)
 from .sheets import DEFAULT_SPREADSHEET_ID, PublicSheet, SheetError, display_number
 from .tournament import (
     TournamentApi,
@@ -219,14 +226,20 @@ class LowlandsClient(discord.Client):
                     # First poll after a (re)start: what already happened is not announced again.
                     state = announcement_baseline(matches, now)
                 else:
-                    stream_url = str((payload.get("config") or {}).get("Stream URL") or "")
+                    tournament_config = payload.get("config") or {}
+                    stream_url = str(tournament_config.get("Stream URL") or "")
                     messages, state = tournament_announcements(state, matches, now, stream_url)
                     guild = self.get_guild(self.guild_id)
                     config = await read_admin_config(guild) if guild else AdminConfig()
-                    channel = guild.get_channel(int(config.announcement_channel_id)) if guild and config.announcement_channel_id else None
+                    hidden = is_hidden(tournament_config)
+                    if hidden:
+                        # Practice run: the same messages, but only in the admin-only configuration channel.
+                        channel = await config_channel(guild) if guild else None
+                    else:
+                        channel = guild.get_channel(int(config.announcement_channel_id)) if guild and config.announcement_channel_id else None
                     if messages and config.tournament_announcements and isinstance(channel, discord.TextChannel):
                         for text in messages:
-                            await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+                            await channel.send((HIDDEN_PREFIX if hidden else "") + text, allowed_mentions=discord.AllowedMentions.none())
             except TournamentError as exc:
                 logging.warning("Tournament announcements: %s", exc)
             except (discord.HTTPException, ValueError) as exc:
@@ -1107,9 +1120,15 @@ async def handle_prefix_command(message: discord.Message) -> None:
             )
         elif command == "bracket":
             payload = await asyncio.to_thread(client.tournament.bracket)
+            if is_hidden(payload.get("config")):
+                await message.reply(NOT_PUBLIC, mention_author=False)
+                return
             await message.reply(embed=tournament_bracket_embed(payload), mention_author=False)
         elif command == "results":
             payload = await asyncio.to_thread(client.tournament.bracket)
+            if is_hidden(payload.get("config")):
+                await message.reply(NOT_PUBLIC, mention_author=False)
+                return
             name = str((payload.get("config") or {}).get("Tournament Name") or "")
             await message.reply(results_text(payload.get("matches") or [], name), mention_author=False,
                                 allowed_mentions=discord.AllowedMentions.none())
@@ -1580,9 +1599,19 @@ async def bracket(interaction: discord.Interaction) -> None:
     await interaction.response.defer()
     try:
         payload = await asyncio.to_thread(client.tournament.bracket)
+        if is_hidden(payload.get("config")):
+            await hidden_reply(interaction, embed=tournament_bracket_embed(payload))
+            return
         await interaction.followup.send(embed=tournament_bracket_embed(payload))
     except TournamentError as exc:
         await tournament_failure(interaction, exc)
+
+
+async def hidden_reply(interaction: discord.Interaction, **content: object) -> None:
+    """Hidden tournament: everyone sees a neutral answer; an admin also gets the real one, privately."""
+    await interaction.followup.send(NOT_PUBLIC)
+    if is_admin(interaction.user):
+        await interaction.followup.send(content=HIDDEN_PREFIX.strip(), ephemeral=True, allowed_mentions=discord.AllowedMentions.none(), **content)
 
 
 @client.tree.command(name="results", description="Completed matches of the active tournament")
@@ -1591,6 +1620,9 @@ async def results(interaction: discord.Interaction) -> None:
     try:
         payload = await asyncio.to_thread(client.tournament.bracket)
         name = str((payload.get("config") or {}).get("Tournament Name") or "")
+        if is_hidden(payload.get("config")):
+            await hidden_reply(interaction, embed=discord.Embed(description=results_text(payload.get("matches") or [], name)))
+            return
         await interaction.followup.send(results_text(payload.get("matches") or [], name), allowed_mentions=discord.AllowedMentions.none())
     except TournamentError as exc:
         await tournament_failure(interaction, exc)

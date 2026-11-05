@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from league_bot.announcements import announcements, baseline, next_opponent, results_text
+from league_bot.announcements import HIDDEN_PREFIX, announcements, baseline, is_hidden, next_opponent, results_text
 
 NOW = datetime(2026, 11, 5, 19, 0, tzinfo=timezone.utc)
 
@@ -56,6 +56,15 @@ class AnnouncementTests(unittest.TestCase):
         self.assertEqual(next_opponent(matches, "Anna", "M1"), "")
         self.assertEqual(results_text(matches, "Cup"), "**Cup**\nSemifinal: **Anna** 2-0 Bas")
         self.assertEqual(results_text([]), "No completed matches yet.")
+
+    def test_hidden_tournament(self):
+        self.assertTrue(is_hidden({"Visibility": "Hidden"}))
+        self.assertTrue(is_hidden({"Visibility": " hidden "}))
+        self.assertFalse(is_hidden({"Visibility": "Public"}))
+        self.assertFalse(is_hidden({"Visibility": ""}))
+        self.assertFalse(is_hidden({}))
+        self.assertFalse(is_hidden(None))
+        self.assertIn("Hidden tournament", HIDDEN_PREFIX)
 
 
 if __name__ == "__main__":

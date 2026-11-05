@@ -48,6 +48,7 @@ const TOURNAMENT = {
       "Check-in Opens At", "Check-in Closes At",
       "Auto-generate Official Bracket", "Official Bracket Generated At", "Bracket Generation Error",
       "Event", "Event Phase", "Event Qualifies", "Entry From", "Groups", "Advance Count",
+      "Visibility",
     ],
     PLAYERS: [
       "Seed", "Player", "GeoGuessr User ID", "Discord", "Discord User ID", "Country",
@@ -67,6 +68,9 @@ const TOURNAMENT = {
     ],
     LOG: ["Timestamp", "Actor", "Action", "Match ID", "Details", "Tournament ID"],
   },
+  // Visibility column: a Hidden tournament runs normally (Discord commands, broadcast app, sheet) but stays off the
+  // website and public Discord channels, for a full practice run on production. Empty counts as Public.
+  VISIBILITY: ["Public", "Hidden"],
   // Bracket formats, chosen with the Type column.
   TYPES: ["Single Elimination", "Double Elimination", "Round Robin", "Practice"],
   // Allowed Event and Event Phase values; the phase IDs match content/nk-2027.json on the website.
@@ -170,6 +174,10 @@ function createTournament() {
   if (groups ? !(Number.isInteger(maximum) && maximum >= 2 && maximum <= 64) : ![8, 16, 32, 64].includes(maximum)) {
     throw Error(groups ? "Maximum players must be 2 to 64." : "Maximum players must be 8, 16, 32 or 64.");
   }
+  const visibilityPrompt = ui.prompt("Visibility", "public or hidden (empty = public). Hidden: a practice run that stays off the website and public Discord channels.", ui.ButtonSet.OK_CANCEL);
+  if (visibilityPrompt.getSelectedButton() !== ui.Button.OK) return;
+  const visibility = {"": "Public", public: "Public", hidden: "Hidden"}[String(visibilityPrompt.getResponseText() || "").trim().toLowerCase()];
+  if (!visibility) throw Error("Choose public or hidden.");
   const publicSs = SpreadsheetApp.create(name + " - Public Bracket");
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const tournamentsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
@@ -179,6 +187,7 @@ function createTournament() {
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', true, "", ""];
   tournamentsSheet.getRange(newRow, 1, 1, row.length).setValues([row]);
+  tournamentsSheet.getRange(newRow, TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Visibility") + 1).setValue(visibility);
   tournamentSetConfig_("Active Tournament ID", id);
   tournamentSetConfig_("Tournament Name", name);
   tournamentSetConfig_("Tournament Status", "Registration");
@@ -1070,6 +1079,7 @@ function tournamentValidation_(ss) {
   const list = (values, help) => SpreadsheetApp.newDataValidation().requireValueInList(values, true).setAllowInvalid(false).setHelpText(help).build();
   const phases = [].concat(...Object.values(TOURNAMENT.EVENTS));
   column("Type").setDataValidation(list(TOURNAMENT.TYPES, "Bracket format of this tournament."));
+  column("Visibility").setDataValidation(list(TOURNAMENT.VISIBILITY, "Hidden: not on the website, Discord announcements only in the admin channel. Empty = Public."));
   column("Event").setDataValidation(list(Object.keys(TOURNAMENT.EVENTS), "Leave empty for a tournament outside an event."));
   column("Event Phase").setDataValidation(list(phases.filter((phase, index) => phases.indexOf(phase) === index), "Phase ID from the event page on the website."));
   column("Groups").setDataValidation(SpreadsheetApp.newDataValidation().requireNumberBetween(1, 8).setAllowInvalid(false).setHelpText("Number of groups for Round Robin.").build());
@@ -1165,11 +1175,13 @@ function doGet(e) {
     if (action === "health") return tournamentJson_({ok: true, service: "geonederland-tournament"});
     if (action === "bracket") return tournamentJson_({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()});
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
-    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(), updated_at: tournamentWebsiteUpdatedAt_()});
-    if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id)});
+    // include_hidden=1 (broadcast app): also Hidden tournaments, marked hidden: true. The website never asks for them.
+    const includeHidden = String(e.parameter.include_hidden || "") === "1";
+    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(includeHidden), updated_at: tournamentWebsiteUpdatedAt_()});
+    if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, includeHidden)});
     // GeoNederland broadcast app: the public detail plus GeoGuessr user IDs, so the broadcast can put the right
     // players on the right side. Still behind the shared secret; never shown on the website.
-    if (action === "broadcast_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)});
+    if (action === "broadcast_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, true), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)});
     throw Error("Unknown action: " + action);
   } catch (error) {
     return tournamentJson_({ok: false, error: String(error.message || error)});
@@ -1293,9 +1305,14 @@ function tournamentAssertEntryAllowed_(tournament, discordId, geoId) {
 }
 
 /* Strict public allowlist shared by the website and Liquipedia exporter. */
-function tournamentWebsiteIndex_() {
+/** Hidden: a practice tournament that stays off the website and public Discord channels. Empty = Public. */
+function tournamentHidden_(row) {
+  return String((row && row.Visibility) || "").trim().toLowerCase() === "hidden";
+}
+
+function tournamentWebsiteIndex_(includeHidden) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  return tournamentRows_(ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)).map((row) => {
+  return tournamentRows_(ss.getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS)).filter((row) => includeHidden || !tournamentHidden_(row)).map((row) => {
     const id = String(row["Tournament ID"] || "");
     const players = tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.PLAYERS), id)
       .filter((player) => !["Withdrawn", "Disqualified"].includes(String(player.Status)));
@@ -1305,11 +1322,12 @@ function tournamentWebsiteIndex_() {
   });
 }
 
-function tournamentWebsiteDetail_(tournamentId) {
+function tournamentWebsiteDetail_(tournamentId, includeHidden) {
   const id = String(tournamentId || "").trim();
   if (!/^[a-z0-9-]{1,80}$/i.test(id)) throw Error("Invalid tournament ID.");
   const tournament = tournamentById_(id);
-  if (!tournament) throw Error("Tournament not found.");
+  // A Hidden tournament answers exactly like one that does not exist, unless the broadcast app asks for it.
+  if (!tournament || (tournamentHidden_(tournament) && !includeHidden)) throw Error("Tournament not found.");
   if (!tournamentValidLiquipediaBracketId_(tournament["Liquipedia Bracket ID"])) {
     const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Liquipedia Bracket ID") + 1;
     tournament["Liquipedia Bracket ID"] = tournamentNewLiquipediaBracketId_();
@@ -1350,6 +1368,7 @@ function tournamentWebsiteSummary_(row, participantCount, matchCount, winner) {
     checkin_opens_at: tournamentDateIso_(row["Check-in Opens At"]),
     checkin_closes_at: tournamentDateIso_(row["Check-in Closes At"] || (row["Check-in Opens At"] && row["Start At"])),
     event: tournamentEventKey_(row.Event), event_phase: tournamentEventKey_(row["Event Phase"]),
+    ...(tournamentHidden_(row) ? {hidden: true} : {}),
   };
 }
 

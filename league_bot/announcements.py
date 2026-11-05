@@ -70,6 +70,15 @@ def _https(value: object) -> str:
     return text if text.startswith("https://") else ""
 
 
+def is_hidden(config: dict[str, Any] | None) -> bool:
+    """Visibility Hidden in the Tournaments tab: a practice run that stays out of public channels."""
+    return str((config or {}).get("Visibility") or "").strip().lower() == "hidden"
+
+
+HIDDEN_PREFIX = "\N{LOCK} **Hidden tournament** (only admins see this) \N{EM DASH} "
+NOT_PUBLIC = "There is no public tournament right now."
+
+
 def baseline(matches: list[dict[str, Any]], now: datetime) -> State:
     """Everything that is already true counts as announced."""
     state: State = {}
