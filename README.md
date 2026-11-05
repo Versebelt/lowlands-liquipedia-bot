@@ -241,6 +241,23 @@ The first poll after a restart is a baseline, so a restart never repeats old mes
 configuration channel as the reminders. Anyone can list the completed matches with `/results`, `/uitslagen`,
 `!results` or `!uitslagen`.
 
+### Hidden practice tournament
+
+Set `Visibility` to `Hidden` in the Tournaments tab (or answer `hidden` when you create a tournament) to run a full
+practice tournament on production without making it public. Registration, check-in, `/mymatch`, ready, party links,
+results and the broadcast app all work exactly as for a real tournament. What changes:
+
+- The website does not list it: `public_index` leaves it out and `public_tournament` answers "Tournament not found",
+  so the Liquipedia export cannot publish it either.
+- Tournament announcements go to the private configuration channel (`lowlands-bot-config`) with a "Hidden tournament"
+  prefix instead of the announcement channel.
+- `/bracket`, `/results` and `/uitslagen` answer "There is no public tournament right now"; an admin additionally gets
+  the real answer privately. `!bracket` and `!results` only give the neutral answer. Players should use the slash
+  commands, whose replies are private; `!register` and `!checkin` reply in the channel.
+
+Empty or `Public` is a normal tournament. Set it back to `Public` (or create the real tournament) when you are done.
+The broadcast app sees hidden tournaments by asking `public_index` and `public_tournament` with `include_hidden=1`.
+
 ### GeoNederland broadcast app
 
 The broadcast app (private repository `Versebelt/geonederland-broadcast`) uses the same Apps Script and secret:
