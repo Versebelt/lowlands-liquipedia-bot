@@ -45,15 +45,19 @@ deployment and API secret. Never point staging at the production spreadsheet.
 Both environments need the same secret names, but with values belonging to that
 environment:
 
+- `DEPLOY_ENVIRONMENT`: exactly `staging` or `production`, matching the Environment;
 - `CLASPRC_JSON`: the contents of `~/.clasprc.json` after `clasp login`;
 - `APPS_SCRIPT_ID`: the script ID of that environment's Tournament Control project;
 - `APPS_SCRIPT_DEPLOYMENT_ID`: that environment's web-app deployment ID;
 - `TOURNAMENT_API_URL` and `TOURNAMENT_API_SECRET`: that environment's `/exec`
   URL and secret, used for the post-deploy health check.
 
-Without the first three the workflow skips the deploy with a warning. After a
-deploy that adds sheet columns, run **Set up / repair Admin sheet** once in the
-matching environment.
+`DEPLOY_ENVIRONMENT` is an intentional guard against GitHub falling back to
+repository-level secrets when an Environment is empty or misconfigured. Without
+the guard the job fails before it can deploy a script. Without the next three
+deployment secrets the workflow skips the deploy with a warning. After a deploy
+that adds sheet columns, run **Set up / repair Admin sheet** once in the matching
+environment.
 
 ## Player registration
 

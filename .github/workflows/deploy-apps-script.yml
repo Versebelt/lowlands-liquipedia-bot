@@ -69,6 +69,8 @@ jobs:
       group: apps-script-${{ github.event_name == 'workflow_dispatch' && inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}
       cancel-in-progress: false
     env:
+      EXPECTED_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}
+      DEPLOY_ENVIRONMENT: ${{ secrets.DEPLOY_ENVIRONMENT }}
       CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
       APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
       APPS_SCRIPT_DEPLOYMENT_ID: ${{ secrets.APPS_SCRIPT_DEPLOYMENT_ID }}
@@ -86,6 +88,10 @@ jobs:
       - name: Check secrets
         id: secrets
         run: |
+          if [ "$DEPLOY_ENVIRONMENT" != "$EXPECTED_TARGET" ]; then
+            echo "::error::DEPLOY_ENVIRONMENT must be set to '$EXPECTED_TARGET' in the '$EXPECTED_TARGET' GitHub Environment. Repository-level secrets are deliberately not sufficient."
+            exit 1
+          fi
           if [ -z "$CLASPRC_JSON" ] || [ -z "$APPS_SCRIPT_ID" ] || [ -z "$APPS_SCRIPT_DEPLOYMENT_ID" ]; then
             echo "::warning::CLASPRC_JSON, APPS_SCRIPT_ID or APPS_SCRIPT_DEPLOYMENT_ID is missing; Apps Script was not deployed."
             echo "skip=true" >> "$GITHUB_OUTPUT"
