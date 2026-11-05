@@ -1,17 +1,28 @@
 name: Deploy Apps Script
 
-# Pushes apps-script/Tournament.gs to the Tournament Control project and points
-# the existing web-app deployment at the new version, so the /exec URL stays the
-# same. Only the manifest and Tournament.gs are uploaded: a stray local file can
-# never reach the project.
+# Staging and production use separate GitHub Environments, Apps Script projects,
+# deployments, sheets and secrets. A push to broadcast-koppeling deploys to
+# staging. A push to main targets production, where the environment must have a
+# required reviewer so the deploy cannot start without explicit approval.
+# Only the manifest and Tournament.gs are uploaded: a stray local file can never
+# reach either project.
 
 on:
   push:
-    branches: [main]
+    branches: [main, broadcast-koppeling]
     paths:
       - "apps-script/**"
       - ".github/workflows/deploy-apps-script.yml"
   workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to deploy
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   contents: read
@@ -52,6 +63,11 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}
+    concurrency:
+      group: apps-script-${{ github.event_name == 'workflow_dispatch' && inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}
+      cancel-in-progress: false
     env:
       CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
       APPS_SCRIPT_ID: ${{ secrets.APPS_SCRIPT_ID }}
@@ -88,10 +104,11 @@ jobs:
           printf '{"scriptId":"%s","rootDir":""}' "$APPS_SCRIPT_ID" > "$dir/.clasp.json"
           cd "$dir"
           npx -y @google/clasp@3.4.1 push --force
-          version=$(npx -y @google/clasp@3.4.1 create-version "commit ${GITHUB_SHA::7}" | grep -o '[0-9]\+' | tail -1)
+          target="${{ github.event_name == 'workflow_dispatch' && inputs.target || (github.ref_name == 'main' && 'production' || 'staging') }}"
+          version=$(npx -y @google/clasp@3.4.1 create-version "$target commit ${GITHUB_SHA::7}" | grep -o '[0-9]\+' | tail -1)
           test -n "$version"
-          npx -y @google/clasp@3.4.1 update-deployment "$APPS_SCRIPT_DEPLOYMENT_ID" -V "$version" -d "commit ${GITHUB_SHA::7}"
-          echo "Deployed Apps Script version $version"
+          npx -y @google/clasp@3.4.1 update-deployment "$APPS_SCRIPT_DEPLOYMENT_ID" -V "$version" -d "$target commit ${GITHUB_SHA::7}"
+          echo "Deployed Apps Script version $version to $target"
 
       - name: Check the web app
         if: steps.secrets.outputs.skip != 'true' && env.TOURNAMENT_API_URL != '' && env.TOURNAMENT_API_SECRET != ''
