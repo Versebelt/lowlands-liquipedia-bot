@@ -28,22 +28,36 @@ logs are tagged with that ID and are never reset for the next event. The
 The secret is required for every request. The public bracket spreadsheet ID is
 already present in the initial Admin spreadsheet created for this project.
 
-## Automatic deploy
+## Staging and production deploys
 
-After the first installation, `.github/workflows/deploy-apps-script.yml` deploys
-every change to `apps-script/` on `main`: it runs the tests, uploads only
-`appsscript.json` and `Tournament.gs` (as `Code.js`), creates a version, points
-the existing web-app deployment at it (the `/exec` URL stays the same) and checks
-that the web app still answers. It needs these repository secrets:
+`.github/workflows/deploy-apps-script.yml` has two isolated targets:
 
+- pushes to `broadcast-koppeling` deploy to the GitHub Environment `staging`;
+- pushes to `main` target the GitHub Environment `production`;
+- a manual run can explicitly select either target.
+
+Create both environments under **Settings → Environments**. Configure
+`production` with at least one required reviewer. This makes a merge to `main`
+run the tests immediately but pause before touching the live Apps Script project.
+Staging must use its own Admin spreadsheet, Apps Script project, web-app
+deployment and API secret. Never point staging at the production spreadsheet.
+
+Both environments need the same secret names, but with values belonging to that
+environment:
+
+- `DEPLOY_ENVIRONMENT`: exactly `staging` or `production`, matching the Environment;
 - `CLASPRC_JSON`: the contents of `~/.clasprc.json` after `clasp login`;
-- `APPS_SCRIPT_ID`: the script ID of the Tournament Control project;
-- `APPS_SCRIPT_DEPLOYMENT_ID`: the ID of the web-app deployment;
-- `TOURNAMENT_API_URL` and `TOURNAMENT_API_SECRET` (already used by the
-  Liquipedia test workflow) for the final check.
+- `APPS_SCRIPT_ID`: the script ID of that environment's Tournament Control project;
+- `APPS_SCRIPT_DEPLOYMENT_ID`: that environment's web-app deployment ID;
+- `TOURNAMENT_API_URL` and `TOURNAMENT_API_SECRET`: that environment's `/exec`
+  URL and secret, used for the post-deploy health check.
 
-Without the first three the workflow skips the deploy with a warning. After a
-deploy that adds sheet columns, run **Set up / repair Admin sheet** once.
+`DEPLOY_ENVIRONMENT` is an intentional guard against GitHub falling back to
+repository-level secrets when an Environment is empty or misconfigured. Without
+the guard the job fails before it can deploy a script. Without the next three
+deployment secrets the workflow skips the deploy with a warning. After a deploy
+that adds sheet columns, run **Set up / repair Admin sheet** once in the matching
+environment.
 
 ## Player registration
 

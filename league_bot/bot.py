@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import datetime, timezone
 import logging
 import math
 import os
@@ -13,6 +14,7 @@ from aiohttp import ClientSession, ClientTimeout, web
 from discord import app_commands
 
 from .admin_config import AdminConfig, CONFIG_CHANNEL_NAME, decode_topic, encode_topic
+from .announcements import announcements as tournament_announcements, baseline as announcement_baseline, results_text
 from .sheets import DEFAULT_SPREADSHEET_ID, PublicSheet, SheetError, display_number
 from .tournament import (
     TournamentApi,
@@ -199,6 +201,37 @@ class LowlandsClient(discord.Client):
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
         self.loop.create_task(self.keep_render_awake())
+        self.loop.create_task(self.announce_tournament())
+
+    async def announce_tournament(self) -> None:
+        """Every minute: post new tournament moments (now on stream, results, starting soon) once."""
+        if not self.tournament.configured:
+            logging.info("Tournament announcements disabled: no tournament API configured")
+            return
+        await self.wait_until_ready()
+        state = None
+        while not self.is_closed():
+            try:
+                payload = await asyncio.to_thread(self.tournament.bracket)
+                matches = [match for match in payload.get("matches") or [] if isinstance(match, dict)]
+                now = datetime.now(timezone.utc)
+                if state is None:
+                    # First poll after a (re)start: what already happened is not announced again.
+                    state = announcement_baseline(matches, now)
+                else:
+                    stream_url = str((payload.get("config") or {}).get("Stream URL") or "")
+                    messages, state = tournament_announcements(state, matches, now, stream_url)
+                    guild = self.get_guild(self.guild_id)
+                    config = await read_admin_config(guild) if guild else AdminConfig()
+                    channel = guild.get_channel(int(config.announcement_channel_id)) if guild and config.announcement_channel_id else None
+                    if messages and config.tournament_announcements and isinstance(channel, discord.TextChannel):
+                        for text in messages:
+                            await channel.send(text, allowed_mentions=discord.AllowedMentions.none())
+            except TournamentError as exc:
+                logging.warning("Tournament announcements: %s", exc)
+            except (discord.HTTPException, ValueError) as exc:
+                logging.warning("Tournament announcements could not be sent: %s", exc)
+            await asyncio.sleep(60)
 
     async def keep_render_awake(self) -> None:
         """Prevent a Render Free web service from sleeping between Discord events."""
@@ -860,6 +893,8 @@ async def handle_prefix_command(message: discord.Message) -> None:
         "wedstrijdvrijgeven": "releasematch",
         "wedstrijduitlichten": "highlightmatch",
         "uitslagbevestigen": "resolvematch",
+        "uitslagen": "results",
+        "toernooimeldingen": "tournamentannouncements",
     }.get(command, command)
 
     try:
@@ -1073,6 +1108,22 @@ async def handle_prefix_command(message: discord.Message) -> None:
         elif command == "bracket":
             payload = await asyncio.to_thread(client.tournament.bracket)
             await message.reply(embed=tournament_bracket_embed(payload), mention_author=False)
+        elif command == "results":
+            payload = await asyncio.to_thread(client.tournament.bracket)
+            name = str((payload.get("config") or {}).get("Tournament Name") or "")
+            await message.reply(results_text(payload.get("matches") or [], name), mention_author=False,
+                                allowed_mentions=discord.AllowedMentions.none())
+        elif command == "tournamentannouncements":
+            if not is_admin(message.author):
+                await message.reply("This command is only available to server administrators.", mention_author=False)
+                return
+            if argument.casefold() not in {"true", "false", "on", "off", "aan", "uit"}:
+                await message.reply("Usage: `!tournamentannouncements <on|off>`", mention_author=False)
+                return
+            config = await read_admin_config(message.guild)
+            config.tournament_announcements = argument.casefold() in {"true", "on", "aan"}
+            await write_admin_config(message.guild, config)
+            await message.reply(f"Tournament announcements are now {'on' if config.tournament_announcements else 'off'}.", mention_author=False)
         elif command == "rules":
             payload = await asyncio.to_thread(client.tournament.bracket)
             await message.reply(embed=tournament_rules_embed(payload), mention_author=False)
@@ -1532,6 +1583,34 @@ async def bracket(interaction: discord.Interaction) -> None:
         await interaction.followup.send(embed=tournament_bracket_embed(payload))
     except TournamentError as exc:
         await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="results", description="Completed matches of the active tournament")
+async def results(interaction: discord.Interaction) -> None:
+    await interaction.response.defer()
+    try:
+        payload = await asyncio.to_thread(client.tournament.bracket)
+        name = str((payload.get("config") or {}).get("Tournament Name") or "")
+        await interaction.followup.send(results_text(payload.get("matches") or [], name), allowed_mentions=discord.AllowedMentions.none())
+    except TournamentError as exc:
+        await tournament_failure(interaction, exc)
+
+
+@client.tree.command(name="uitslagen", description="Uitslagen van het actieve toernooi")
+async def uitslagen(interaction: discord.Interaction) -> None:
+    await results.callback(interaction)
+
+
+@client.tree.command(name="tournamentannouncements", description="Turn automatic tournament announcements on or off")
+@app_commands.default_permissions(administrator=True)
+async def tournamentannouncements(interaction: discord.Interaction, enabled: bool) -> None:
+    if not is_admin(interaction.user) or interaction.guild is None:
+        return
+    await interaction.response.defer(ephemeral=True)
+    config = await read_admin_config(interaction.guild)
+    config.tournament_announcements = enabled
+    await write_admin_config(interaction.guild, config)
+    await interaction.followup.send(f"Tournament announcements are now {'on' if enabled else 'off'}.", ephemeral=True)
 
 
 @client.tree.command(name="rules", description="Open the current tournament regulations")

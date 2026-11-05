@@ -1085,6 +1085,8 @@ function tournamentValidation_(ss) {
   players.getRange("H2:H").insertCheckboxes();
   matches.getRange("J2:M").insertCheckboxes();
   matches.getRange("T2:T").setNumberFormat("yyyy-mm-dd hh:mm");
+  // Series Score as plain text: otherwise Sheets turns "2-1" into a date (2 January) and the score is lost.
+  matches.getRange(2, TOURNAMENT.HEADERS.MATCHES.indexOf("Series Score") + 1, matches.getMaxRows() - 1, 1).setNumberFormat("@");
   matches.getRange("N2:N").setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList([
     "Waiting for opponent", "Waiting for players", "Waiting for broadcast", "Ready to start", "Live", "Pending result", "Complete", "On hold", "Disqualified",
   ], true).build());
@@ -1165,6 +1167,9 @@ function doGet(e) {
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
     if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(), updated_at: tournamentWebsiteUpdatedAt_()});
     if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id)});
+    // GeoNederland broadcast app: the public detail plus GeoGuessr user IDs, so the broadcast can put the right
+    // players on the right side. Still behind the shared secret; never shown on the website.
+    if (action === "broadcast_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)});
     throw Error("Unknown action: " + action);
   } catch (error) {
     return tournamentJson_({ok: false, error: String(error.message || error)});
@@ -1200,7 +1205,7 @@ function tournamentPublicMatch_(row) {
     highlighted: tournamentBool_(row.Highlighted), player1_ready: tournamentBool_(row["Player 1 Ready"]),
     player2_ready: tournamentBool_(row["Player 2 Ready"]), admin_released: tournamentBool_(row["Admin Released"]),
     status: String(row.Status || ""), party_url: String(row["Party URL"] || ""),
-    series_score: String(row["Series Score"] || "0-0"), winner: String(row.Winner || ""),
+    series_score: tournamentScoreText_(row["Series Score"]) || "0-0", winner: String(row.Winner || ""),
     scheduled_at: tournamentDateIso_(row["Scheduled At"]), stream_url: String(row["Stream URL"] || ""),
   };
 }
@@ -1365,7 +1370,7 @@ function tournamentWebsiteMatch_(row, avatars) {
     player1, player2, player1_avatar_url: String((avatars || {})[player1] || ""),
     player2_avatar_url: String((avatars || {})[player2] || ""), best_of: Number(row["Best Of"] || 3),
     highlighted: tournamentBool_(row.Highlighted), status: String(row.Status || ""),
-    series_score: String(row["Series Score"] || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
+    series_score: (tournamentScoreText_(row["Series Score"]) || "0-0").replace(/[^0-9\-–: ]/g, "").slice(0, 20),
     winner: String(row.Winner || ""), scheduled_at: tournamentDateIso_(row["Scheduled At"]),
     stream_url: tournamentWebsiteUrl_(row["Stream URL"]), updated_at: tournamentDateIso_(row["Updated At"]),
   };
@@ -1562,7 +1567,12 @@ function tournamentHandleAction_(payload) {
   if (action === "result") return tournamentSubmitResult_(match, payload.discord_user_id, payload.url, payload.discord_name, payload.discord_display_name);
   if (action === "release") return tournamentRelease_(match, payload.actor || payload.discord_user_id);
   if (action === "highlight") return tournamentHighlight_(match, payload.actor || payload.discord_user_id, payload.highlighted);
-  if (action === "resolve") return tournamentResolve_(match, payload.actor || payload.discord_user_id, payload.winner, payload.score);
+  if (action === "resolve") {
+    tournamentBroadcastExpect_(match, payload);
+    return tournamentResolve_(match, payload.actor || payload.discord_user_id, payload.winner, payload.score);
+  }
+  if (action === "game") return tournamentBroadcastGame_(match, payload);
+  if (action === "score") return tournamentBroadcastScore_(match, payload);
   throw Error("Unknown tournament action: " + action);
 }
 
@@ -1661,7 +1671,10 @@ function tournamentWriteMatch_(match, changes) {
   Object.entries(changes).forEach(([name, value]) => {
     const column = headers.indexOf(name) + 1;
     if (!column) throw Error("Unknown match field: " + name);
-    match.__sheet.getRange(match.__row, column).setValue(value);
+    const cell = match.__sheet.getRange(match.__row, column);
+    // A score like "2-1" would otherwise be stored as a date; text format first, then the value.
+    if (name === "Series Score") cell.setNumberFormat("@");
+    cell.setValue(value);
     match[name] = value;
   });
   const updatedColumn = headers.indexOf("Updated At") + 1;
@@ -1763,6 +1776,88 @@ function tournamentResolve_(match, actor, winner, score) {
   });
   tournamentLog_(actor, "resolve", match["Match ID"], name + " " + String(score || ""));
   return result;
+}
+
+/* ========================================================================== */
+/* GeoNederland broadcast app: admin-only actions behind the shared secret.    */
+/* The broadcast sees every game live, so it records game results and the     */
+/* live series score instead of waiting for result links ("Pending review").  */
+/* ========================================================================== */
+
+const TOURNAMENT_BROADCAST_ACTOR = "GeoNederland broadcast";
+
+function tournamentBroadcastIds_(tournamentId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS);
+  const ids = {};
+  tournamentRowsFor_(sheet, tournamentId).forEach((row) => {
+    const player = String(row.Player || "").trim();
+    if (!player || !String(row["GeoGuessr User ID"] || "").trim()) return;
+    try {
+      ids[player] = tournamentGeoGuessrUserId_(row["GeoGuessr User ID"]);
+    } catch (error) {
+      // An invalid profile link in the sheet: leave this player out instead of failing the whole response.
+    }
+  });
+  return ids;
+}
+
+/**
+ * Series Score as text. A score typed or written as "2-1" in a cell without text format comes back from getValues()
+ * as a date (2 January in a d-m locale, 1 February in en_US): turn it back into the score the user meant.
+ */
+function tournamentScoreText_(value) {
+  if (Object.prototype.toString.call(value) !== "[object Date]" || isNaN(value.getTime())) return String(value === null || value === undefined ? "" : value).trim();
+  let locale = "";
+  try { locale = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetLocale() || ""; } catch (error) { locale = ""; }
+  const day = value.getDate(), month = value.getMonth() + 1;
+  return /^en_US/i.test(locale) ? month + "-" + day : day + "-" + month;
+}
+
+/**
+ * Compare-and-set: with expected_score the write only goes through when the sheet still holds that score. This stops
+ * an old retry, a second operator or the broadcast from silently overwriting a manual correction (last write wins).
+ * Without expected_score nothing changes (Discord commands keep working as before).
+ */
+function tournamentBroadcastExpect_(match, payload) {
+  if (payload.expected_score === undefined || payload.expected_score === null) return;
+  const normal = (value) => tournamentScoreText_(value).replace(/\s+/g, "").replace(/[–:]/g, "-") || "0-0";
+  const current = normal(match["Series Score"]);
+  if (current !== normal(payload.expected_score)) {
+    throw Error("Conflict: Series Score in the sheet is " + current + ", expected " + normal(payload.expected_score) + ".");
+  }
+}
+
+function tournamentBroadcastScore_(match, payload) {
+  const score = String(payload.score || "").trim();
+  if (!/^\d{1,2}-\d{1,2}$/.test(score)) throw Error("Score must look like 1-0.");
+  if (["Complete", "Disqualified"].includes(String(match.Status))) throw Error("Match is already closed.");
+  tournamentBroadcastExpect_(match, payload);
+  tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "score", match["Match ID"], score);
+  return tournamentWriteMatch_(match, {"Series Score": score});
+}
+
+function tournamentBroadcastGame_(match, payload) {
+  const game = Number(payload.game);
+  if (!Number.isInteger(game) || game < 1 || game > 9) throw Error("Game must be a number from 1 to 9.");
+  const winner = String(payload.winner || "").trim();
+  if (winner && ![match["Player 1"], match["Player 2"]].includes(winner)) throw Error("Winner must match one of the two players.");
+  const gameId = String(payload.game_id || "").trim();
+  if (gameId && !/^[A-Za-z0-9-]{8,64}$/.test(gameId)) throw Error("Invalid GeoGuessr game ID.");
+  const hp = (value) => (value === "" || value === null || value === undefined || !Number.isFinite(Number(value)) ? "" : Math.max(0, Math.round(Number(value))));
+  const values = [
+    new Date(), match["Match ID"], game, String(payload.mode || "").slice(0, 20),
+    gameId ? "https://www.geoguessr.com/duels/" + gameId + "/summary" : "", TOURNAMENT_BROADCAST_ACTOR,
+    hp(payload.player1_hp), hp(payload.player2_hp), winner, "Confirmed (broadcast)",
+    String(payload.notes || "").slice(0, 300), tournamentActiveId_(),
+  ];
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.GAMES);
+  // The same game sent twice (reconnect, restart) replaces its row instead of adding one.
+  const existing = tournamentRowsForActive_(sheet).find((row) => String(row["Match ID"]) === String(match["Match ID"])
+    && Number(row.Game) === game && String(row["Submitted By"]) === TOURNAMENT_BROADCAST_ACTOR);
+  if (existing) sheet.getRange(existing.__row, 1, 1, values.length).setValues([values]);
+  else sheet.appendRow(values);
+  tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "game", match["Match ID"], "Game " + game + ": " + (winner || "draw"));
+  return {match_id: String(match["Match ID"]), game, winner};
 }
 
 function tournamentLog_(actor, action, matchId, details, tournamentId) {

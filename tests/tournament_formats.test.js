@@ -18,6 +18,7 @@ function sheet(name, headers, rows) {
       return {
         getValues: () => block, getDisplayValues: () => block.map((line) => line.map(String)),
         setValue: (value) => { values[row - 1][col - 1] = value; },
+        setNumberFormat: () => {},
       };
     },
   };
