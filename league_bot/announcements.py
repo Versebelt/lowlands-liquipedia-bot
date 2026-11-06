@@ -13,6 +13,9 @@ from typing import Any
 
 PRE_START = {"", "Waiting for opponent", "Waiting for players", "Waiting for broadcast", "Ready to start"}
 REMINDER_BEFORE = timedelta(minutes=15)
+# The broadcast run of show sets Expected At when the evening runs late (or early); from this difference with
+# Scheduled At the bot tells the players, and again only after another shift of at least this much.
+SHIFT_NOTICE = timedelta(minutes=10)
 EMPTY = {"", "TBD", "BYE"}
 
 
@@ -33,8 +36,8 @@ def _playable(match: dict[str, Any]) -> bool:
     return one not in EMPTY and two not in EMPTY
 
 
-def _scheduled(match: dict[str, Any]) -> datetime | None:
-    value = str(match.get("scheduled_at") or "").strip()
+def _time(match: dict[str, Any], field_name: str) -> datetime | None:
+    value = str(match.get(field_name) or "").strip()
     if not value:
         return None
     try:
@@ -42,6 +45,36 @@ def _scheduled(match: dict[str, Any]) -> datetime | None:
     except ValueError:
         return None
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _scheduled(match: dict[str, Any]) -> datetime | None:
+    return _time(match, "scheduled_at")
+
+
+def _start(match: dict[str, Any]) -> datetime | None:
+    """When the match really starts: the expected time from the broadcast if there is one, else the scheduled time."""
+    return _time(match, "expected_at") or _scheduled(match)
+
+
+def _shift(match: dict[str, Any]) -> datetime | None:
+    """The expected time if it differs enough from the schedule to tell the players, else None."""
+    expected, scheduled = _time(match, "expected_at"), _scheduled(match)
+    if not expected or not scheduled or abs(expected - scheduled) < SHIFT_NOTICE:
+        return None
+    return expected
+
+
+def _shift_told(done: set[str], expected: datetime) -> bool:
+    """Already told the players about (about) this expected time."""
+    for item in done:
+        if item.startswith("shift:"):
+            try:
+                told = datetime.fromtimestamp(int(item[6:]), timezone.utc)
+            except ValueError:
+                continue
+            if abs(told - expected) < SHIFT_NOTICE:
+                return True
+    return False
 
 
 def _best_of(match: dict[str, Any]) -> str:
@@ -61,7 +94,7 @@ def _is_result(match: dict[str, Any]) -> bool:
 
 
 def _reminder_due(match: dict[str, Any], now: datetime) -> bool:
-    start = _scheduled(match)
+    start = _start(match)
     return bool(start) and str(match.get("status") or "") in PRE_START and now < start <= now + REMINDER_BEFORE
 
 
@@ -88,8 +121,11 @@ def baseline(matches: list[dict[str, Any]], now: datetime) -> State:
             done.add("stream")
         if _is_result(match):
             done.add("result")
-        if _reminder_due(match, now) or (_scheduled(match) or now) < now:
+        if _reminder_due(match, now) or (_start(match) or now) < now:
             done.add("reminder")
+        shift = _shift(match)
+        if shift:
+            done.add(f"shift:{int(shift.timestamp())}")
         state[str(match.get("match_id") or "")] = MatchState(done)
     return state
 
@@ -136,9 +172,17 @@ def announcements(
             text = f"**Result:** **{winner}** beats {loser}" + (f" {score}" if score else "") + (f" ({round_name})" if round_name else "") + "."
             opponent = next_opponent(matches, winner, match_id)
             messages.append(text + (f" Next up for {winner}: {opponent}." if opponent else ""))
+        shift = _shift(match)
+        if (_playable(match) and shift and shift > now and str(match.get("status") or "") in PRE_START
+                and not _shift_told(done, shift)):
+            done.add(f"shift:{int(shift.timestamp())}")
+            scheduled = _scheduled(match)
+            word = "later" if scheduled and shift > scheduled else "earlier"
+            planned = f" (planned <t:{int(scheduled.timestamp())}:t>)" if scheduled else ""
+            messages.append(f"**Schedule update:** {one} vs {two} now starts {word}, around <t:{int(shift.timestamp())}:t>{planned}.")
         if _playable(match) and _reminder_due(match, now) and "reminder" not in done:
             done.add("reminder")
-            start = _scheduled(match)
+            start = _start(match)
             when = f"<t:{int(start.timestamp())}:t>" if start else ""
             messages.append(f"**Starting soon:** {one} vs {two}" + (f" ({details})" if details else "") + (f" at {when}." if when else "."))
         new_state[match_id] = MatchState(done)

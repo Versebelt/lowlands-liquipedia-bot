@@ -111,3 +111,25 @@ test("expected_score: a stale or conflicting write is refused instead of overwri
   assert.equal(score(), "2-1");
   assert.throws(() => context.tournamentHandleAction_({action: "resolve", match_id: "cup-R1-M1", winner: "Anna", score: "3-1", expected_score: "2-0"}), /Conflict/);
 });
+
+test("expected times: batch per match, new column on an old sheet, closed matches skipped, empty clears", () => {
+  const {context, sheets, H} = load();
+  const matches = sheets[H.SHEETS.MATCHES];
+  // An older sheet without the Expected At column.
+  const oud = H.HEADERS.MATCHES.indexOf("Expected At");
+  matches.values[0] = [...matches.values[0]]; // de kopregel is hetzelfde array als H.HEADERS.MATCHES
+  matches.values.forEach((line) => line.splice(oud, 1));
+  let max = H.HEADERS.MATCHES.length - 1;
+  matches.getLastColumn = () => matches.values[0].length;
+  matches.getMaxColumns = () => max;
+  matches.insertColumnsAfter = (_, n) => { max += n; matches.values.forEach((line) => line.push(...Array(n).fill(""))); };
+  const result = context.tournamentHandleAction_({action: "expected", times: {"cup-R1-M1": "2026-11-14T20:45:00.000Z", "cup-R1-M2": "2026-11-14T21:30:00.000Z", nope: ""}});
+  assert.equal(result.changed, 1, "complete match and unknown id skipped");
+  assert.equal(matches.values[0][oud], "Expected At");
+  const public1 = context.tournamentPublicMatchesFor_("cup").find((m) => m.match_id === "cup-R1-M1");
+  assert.equal(new Date(public1.expected_at).toISOString(), "2026-11-14T20:45:00.000Z");
+  context.tournamentHandleAction_({action: "expected", times: {"cup-R1-M1": ""}});
+  assert.equal(context.tournamentPublicMatchesFor_("cup").find((m) => m.match_id === "cup-R1-M1").expected_at, "");
+  assert.throws(() => context.tournamentHandleAction_({action: "expected", times: {"cup-R1-M1": "straks"}}), /ISO date/);
+  assert.throws(() => context.tournamentHandleAction_({action: "expected"}), /object/);
+});

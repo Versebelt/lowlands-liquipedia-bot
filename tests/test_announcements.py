@@ -43,6 +43,31 @@ class AnnouncementTests(unittest.TestCase):
         again, _ = announcements(state, after, NOW)
         self.assertEqual(again, [], "every moment only once")
 
+    def test_schedule_shift_from_the_broadcast_once_per_shift(self):
+        scheduled = NOW + timedelta(hours=1)
+        before = [match("M1", "Anna", "Bas", status="Waiting for players", scheduled_at=scheduled.isoformat())]
+        state = baseline(before, NOW)
+        # Running 5 minutes late: not worth a message.
+        small = [match("M1", "Anna", "Bas", status="Waiting for players", scheduled_at=scheduled.isoformat(), expected_at=(scheduled + timedelta(minutes=5)).isoformat())]
+        messages, state = announcements(state, small, NOW)
+        self.assertEqual(messages, [])
+        late = scheduled + timedelta(minutes=25)
+        after = [match("M1", "Anna", "Bas", status="Waiting for players", scheduled_at=scheduled.isoformat(), expected_at=late.isoformat())]
+        messages, state = announcements(state, after, NOW)
+        self.assertEqual(messages, [f"**Schedule update:** Anna vs Bas now starts later, around <t:{int(late.timestamp())}:t> (planned <t:{int(scheduled.timestamp())}:t>)."])
+        nudge = [match("M1", "Anna", "Bas", status="Waiting for players", scheduled_at=scheduled.isoformat(), expected_at=(late + timedelta(minutes=4)).isoformat())]
+        self.assertEqual(announcements(state, nudge, NOW)[0], [], "a few minutes more: no new message")
+        later = late + timedelta(minutes=15)
+        more = [match("M1", "Anna", "Bas", status="Waiting for players", scheduled_at=scheduled.isoformat(), expected_at=later.isoformat())]
+        messages, state = announcements(state, more, NOW)
+        self.assertEqual(len(messages), 1, "another 10+ minutes: tell again")
+        # The reminder follows the expected time, not the schedule.
+        at_old_time = scheduled - timedelta(minutes=10)
+        self.assertEqual([m for m in announcements(state, more, at_old_time)[0] if "Starting soon" in m], [])
+        near = later - timedelta(minutes=10)
+        self.assertTrue(any(m.startswith("**Starting soon:** Anna vs Bas") for m in announcements(state, more, near)[0]))
+        self.assertEqual(announcements(baseline(more, NOW), more, NOW)[0], [], "a restart does not repeat the shift")
+
     def test_no_mentions_or_party_links(self):
         after = [match("M1", "@everyone", "Bas", highlighted=True, admin_released=True, party_url="https://www.geoguessr.com/party/x")]
         messages, _ = announcements({}, after, NOW)
