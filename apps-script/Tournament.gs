@@ -60,7 +60,7 @@ const TOURNAMENT = {
       "Player 1 Ready", "Player 2 Ready", "Admin Released", "Status",
       "Party URL", "Series Score", "Winner", "Next Match ID", "Next Slot",
       "Scheduled At", "Stream URL", "Discord Message ID", "Updated At", "Tournament ID",
-      "Loser Match ID", "Loser Slot",
+      "Loser Match ID", "Loser Slot", "Expected At",
     ],
     GAMES: [
       "Submitted At", "Match ID", "Game", "Mode", "Result URL", "Submitted By",
@@ -1219,6 +1219,7 @@ function tournamentPublicMatch_(row) {
     status: String(row.Status || ""), party_url: String(row["Party URL"] || ""),
     series_score: tournamentScoreText_(row["Series Score"]) || "0-0", winner: String(row.Winner || ""),
     scheduled_at: tournamentDateIso_(row["Scheduled At"]), stream_url: String(row["Stream URL"] || ""),
+    expected_at: tournamentDateIso_(row["Expected At"]),
   };
 }
 
@@ -1579,6 +1580,7 @@ function tournamentHandleAction_(payload) {
   if (action === "register") return tournamentRegister_(payload);
   if (action === "checkin") return tournamentCheckIn_(payload);
   if (action === "unregister") return tournamentUnregister_(payload);
+  if (action === "expected") return tournamentBroadcastExpected_(payload);
   const match = tournamentFindMatch_(payload.match_id);
   if (["ready", "party", "result"].includes(action)) tournamentRequireParticipant_(match, payload.discord_user_id, payload.discord_name, payload.discord_display_name);
   if (action === "ready") return tournamentSetReady_(match, payload.discord_user_id, payload.discord_name, payload.discord_display_name);
@@ -1844,6 +1846,37 @@ function tournamentBroadcastExpect_(match, payload) {
   if (current !== normal(payload.expected_score)) {
     throw Error("Conflict: Series Score in the sheet is " + current + ", expected " + normal(payload.expected_score) + ".");
   }
+}
+
+// Expected start times from the broadcast run of show, when the evening runs late (or early). One batch for all
+// matches of the active tournament: {times: {matchId: ISO time or ""}}. Empty clears it, so Scheduled At counts
+// again. Does not bump Updated At or sync the public spreadsheet: it is a hint for the bot, not a result.
+function tournamentBroadcastExpected_(payload) {
+  const times = payload.times && typeof payload.times === "object" && !Array.isArray(payload.times) ? payload.times : null;
+  if (!times) throw Error("Expected times must be an object of match IDs.");
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.MATCHES);
+  const column = tournamentEnsureColumn_(sheet, TOURNAMENT.HEADERS.MATCHES, "Expected At");
+  const rows = tournamentRowsForActive_(sheet);
+  let changed = 0;
+  Object.keys(times).slice(0, 200).forEach((id) => {
+    const row = rows.find((r) => String(r["Match ID"]) === String(id));
+    if (!row || ["Complete", "Disqualified"].includes(String(row.Status))) return;
+    const text = String(times[id] || "").trim();
+    if (text && Number.isNaN(Date.parse(text))) throw Error("Expected time must be an ISO date: " + id);
+    sheet.getRange(row.__row, column).setValue(text ? new Date(text) : "");
+    changed += 1;
+  });
+  if (changed) tournamentLog_(payload.actor || TOURNAMENT_BROADCAST_ACTOR, "expected", "", changed + " match(es)");
+  return {changed};
+}
+
+// A column added after the sheet was set up (e.g. Expected At): add it to an existing sheet on first use.
+function tournamentEnsureColumn_(sheet, headers, name) {
+  const column = headers.indexOf(name) + 1;
+  if (!column) throw Error("Unknown column: " + name);
+  if (sheet.getMaxColumns() < column) sheet.insertColumnsAfter(sheet.getMaxColumns(), column - sheet.getMaxColumns());
+  if (String(sheet.getRange(1, column).getDisplayValues()[0][0]) !== name) sheet.getRange(1, column).setValue(name);
+  return column;
 }
 
 function tournamentBroadcastScore_(match, payload) {
