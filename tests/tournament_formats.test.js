@@ -169,6 +169,48 @@ test("single elimination still builds the same bracket", () => {
   rows.forEach((row) => assert.equal(row[context.H.HEADERS.MATCHES.indexOf("Loser Match ID")], ""));
 });
 
+test("Lowlands Playoffs uses staggered entry and streams every match", () => {
+  const context = load();
+  const tournament = {"Tournament ID": "ll-s2", Type: "Lowlands Playoffs", "Maximum Players": 16, "Bracket Size": 16};
+  const {rows, bracketSize, playerCount} = context.tournamentBuildBracket_(tournament, seededPlayers(16), "registered");
+  const col = (name) => context.H.HEADERS.MATCHES.indexOf(name);
+  assert.equal(bracketSize, 16);
+  assert.equal(playerCount, 16);
+  assert.equal(rows.length, 15);
+  assert.deepEqual(Array.from(rows, (row) => row[col("Round")]), [
+    "Round 1", "Round 1", "Round 1", "Round 1",
+    "Round 2", "Round 2", "Round 2", "Round 2",
+    "Quarterfinal", "Quarterfinal", "Quarterfinal", "Quarterfinal",
+    "Semifinal", "Semifinal", "Final",
+  ]);
+  assert.deepEqual(Array.from(rows.slice(0, 4), (row) => [row[col("Player 1")], row[col("Player 2")]]), [
+    ["P9", "P16"], ["P12", "P13"], ["P10", "P15"], ["P11", "P14"],
+  ]);
+  assert.deepEqual(Array.from(rows.slice(4, 8), (row) => row[col("Player 1")]), ["P8", "P5", "P7", "P6"]);
+  assert.deepEqual(Array.from(rows.slice(8, 12), (row) => row[col("Player 1")]), ["P1", "P4", "P2", "P3"]);
+  rows.forEach((row) => assert.equal(row[col("Highlighted")], true));
+  const {open} = play(context, rows);
+  assert.equal(open.length, 0);
+  assert.equal(rows.at(-1)[col("Winner")], "P1");
+});
+
+test("Lowlands Playoffs rejects incomplete or non-consecutive manual seeding", () => {
+  const context = load();
+  const tournament = {"Tournament ID": "ll-s2", Type: "Lowlands Playoffs"};
+  assert.throws(() => context.tournamentBuildBracket_(tournament, seededPlayers(15), "registered"), /exactly 16 players/);
+  const invalid = seededPlayers(16); invalid[15].Seed = 20;
+  assert.throws(() => context.tournamentBuildBracket_(tournament, invalid, "registered"), /consecutive seeds 1–16/);
+});
+
+test("automatic bracket size starts small and grows to the configured maximum", () => {
+  const context = load();
+  assert.equal(context.tournamentNextBracketSize_(0, 32), 2);
+  assert.equal(context.tournamentNextBracketSize_(3, 32), 4);
+  assert.equal(context.tournamentNextBracketSize_(17, 32), 32);
+  assert.equal(context.tournamentNextBracketSize_(64, 64), 64);
+  assert.equal(context.tournamentNextBracketSize_(40, 32), 32);
+});
+
 const match = (id, p1, p2, winner) => ({"Match ID": id, "Player 1": p1, "Player 2": p2, Winner: winner, "Tournament ID": id.split("-R")[0]});
 const oq1Matches = [
   match("oq1-R1-M1", "Anna", "Hans", "Anna"), match("oq1-R1-M2", "Bas", "Cor", "Bas"),
@@ -210,5 +252,6 @@ test("the Type column picks the format", () => {
   assert.equal(context.tournamentBracketFormat_({Type: "Practice"}), "single-elimination");
   assert.equal(context.tournamentBracketFormat_({Type: "Double Elimination"}), "double-elimination");
   assert.equal(context.tournamentBracketFormat_({Type: "Round Robin"}), "round-robin");
+  assert.equal(context.tournamentBracketFormat_({Type: "Lowlands Playoffs"}), "single-elimination");
   assert.equal(context.tournamentBracketFormat_(null), "single-elimination");
 });
