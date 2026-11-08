@@ -122,10 +122,12 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
   tournamentEnsureInitialTournament_();
   tournamentEnsureBracketSizes_();
+  tournamentMigrateHomepageUrls_();
   tournamentEnsureLiquipediaBracketIds_();
   tournamentCleanGhostTournamentIds_();
   tournamentMigrateLegacyTournamentIds_();
   tournamentEnsureAutomationTrigger_();
+  tournamentEnsureAdminEditTrigger_();
   tournamentSyncConfigFromActive_(tournamentActive_());
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
 }
@@ -549,6 +551,74 @@ function tournamentSyncConfigFromActive_(tournament, registrationStatus) {
     "Rules URL": tournament["Rules URL"] || "",
   };
   Object.entries(fields).forEach(([setting, value]) => tournamentSetConfig_(setting, value));
+}
+
+function tournamentConfigTournamentField_(setting) {
+  return ({
+    "Tournament Name": "Tournament Name",
+    "Tournament Status": "Status",
+    "Maximum Players": "Maximum Players",
+    "Bracket Size": "Bracket Size",
+    "Bracket Type": "Type",
+    "Default Best Of": "Default Best Of",
+    "Preset 1": "Preset 1",
+    "Preset 2": "Preset 2",
+    "Preset 3": "Preset 3",
+    "Public Spreadsheet ID": "Public Spreadsheet ID",
+    "Public Bracket URL": "Public Bracket URL",
+    "Stream URL": "Stream URL",
+    "Rules URL": "Rules URL",
+  })[String(setting || "")] || "";
+}
+
+// Older versions treated the Tournament sheet as output only. Preserve URLs
+// typed there before the first repaired setup copies the active tournament back.
+function tournamentMigrateHomepageUrls_() {
+  const config = tournamentConfig_(), tournament = tournamentActive_(), changes = {};
+  ["Stream URL", "Rules URL"].forEach((field) => {
+    if (!String(tournament[field] || "").trim() && String(config[field] || "").trim()) changes[field] = config[field];
+  });
+  if (Object.keys(changes).length) tournamentUpdateRow_(tournament, changes);
+}
+
+function tournamentEnsureAdminEditTrigger_() {
+  const handler = "tournamentAdminOnEdit";
+  if (ScriptApp.getProjectTriggers().some((trigger) => trigger.getHandlerFunction() === handler)) return;
+  ScriptApp.newTrigger(handler).forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onEdit().create();
+}
+
+function tournamentAdminOnEdit(e) {
+  if (!e || !e.range) return;
+  const range = e.range, sheet = range.getSheet(), name = sheet.getName();
+  if (name === TOURNAMENT.SHEETS.CONFIG && range.getColumn() <= 2 && range.getLastColumn() >= 2) {
+    let changed = false;
+    for (let row = range.getRow(); row <= range.getLastRow(); row++) {
+      if (row < 2) continue;
+      const setting = String(sheet.getRange(row, 1).getValue() || ""), field = tournamentConfigTournamentField_(setting);
+      if (!field) continue;
+      tournamentUpdateRow_(tournamentActive_(), {[field]: sheet.getRange(row, 2).getValue()});
+      changed = true;
+    }
+    if (changed) tournamentAfterAdminEdit_();
+    return;
+  }
+  if (name !== TOURNAMENT.SHEETS.TOURNAMENTS || range.getRow() < 2) return;
+  const idColumn = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Tournament ID") + 1;
+  for (let row = range.getRow(); row <= range.getLastRow(); row++) {
+    if (String(sheet.getRange(row, idColumn).getValue() || "") !== tournamentActiveId_()) continue;
+    tournamentSyncConfigFromActive_(tournamentActive_());
+    tournamentAfterAdminEdit_();
+    break;
+  }
+}
+
+function tournamentAfterAdminEdit_() {
+  const tournament = tournamentActive_();
+  try {
+    if (tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"])) tournamentSyncPublicSpreadsheet_(tournament);
+  } catch (error) {
+    tournamentLog_("sheet", "public_sync_error", "", String(error.message || error), tournament["Tournament ID"]);
+  }
 }
 
 function tournamentEnsureInitialTournament_() {
