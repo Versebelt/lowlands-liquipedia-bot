@@ -11,6 +11,7 @@ function onOpen() {
     .addSeparator()
     .addItem("Create new tournament", "createTournament")
     .addItem("Switch active tournament", "switchActiveTournament")
+    .addItem("Configure active tournament as Lowlands Playoffs", "configureLowlandsLeaguePlayoffs")
     .addItem("Archive active tournament", "archiveActiveTournament")
     .addSeparator()
     .addItem("Randomize player seeding", "randomizeTournamentSeeding")
@@ -72,7 +73,7 @@ const TOURNAMENT = {
   // website and public Discord channels, for a full practice run on production. Empty counts as Public.
   VISIBILITY: ["Public", "Hidden"],
   // Bracket formats, chosen with the Type column.
-  TYPES: ["Single Elimination", "Double Elimination", "Round Robin", "Practice"],
+  TYPES: ["Single Elimination", "Double Elimination", "Round Robin", "Lowlands Playoffs", "Practice"],
   // Allowed Event and Event Phase values; the phase IDs match content/nk-2027.json on the website.
   EVENTS: {
     "nk-2027": ["oq1", "oq2", "oq3", "oq4", "rocvaf", "lcq", "groups", "knockout", "quarterfinals", "lan"],
@@ -115,13 +116,17 @@ function setupTournamentSystem() {
   tournamentEnsureConfig_("Registration Status", "Open", "Open / Closed");
   tournamentEnsureConfig_("Registration Deadline", "", "Optional deadline shown in Discord");
   tournamentEnsureConfig_("Maximum Players", 32, "New registrations stop at this number");
+  tournamentEnsureConfig_("Bracket Size", 32, "Automatically follows registrations/check-ins");
+  tournamentEnsureConfig_("Bracket Type", "Single Elimination", "Active tournament format");
   tournamentEnsureConfig_("Rules URL", "", "Public link to the current tournament regulations");
   tournamentEnsureConfig_("Active Tournament ID", "practice-1", "Selects which tournament Discord and the menu operate on");
   tournamentEnsureInitialTournament_();
+  tournamentEnsureBracketSizes_();
   tournamentEnsureLiquipediaBracketIds_();
   tournamentCleanGhostTournamentIds_();
   tournamentMigrateLegacyTournamentIds_();
   tournamentEnsureAutomationTrigger_();
+  tournamentSyncConfigFromActive_(tournamentActive_());
   ss.toast("Tournament system ready.", "GeoNederland Tournament", 6);
 }
 
@@ -163,16 +168,17 @@ function createTournament() {
   const id = String(idPrompt.getResponseText() || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
   if (!id) throw Error("Enter a valid Tournament ID.");
   if (tournamentById_(id)) throw Error("Tournament ID already exists: " + id);
-  const typePrompt = ui.prompt("Format", "single, double or groups (empty = single elimination)", ui.ButtonSet.OK_CANCEL);
+  const typePrompt = ui.prompt("Format", "single, double, groups or lowlands (empty = single elimination)", ui.ButtonSet.OK_CANCEL);
   if (typePrompt.getSelectedButton() !== ui.Button.OK) return;
-  const type = {"": "Single Elimination", single: "Single Elimination", double: "Double Elimination", groups: "Round Robin"}[String(typePrompt.getResponseText() || "").trim().toLowerCase()];
-  if (!type) throw Error("Choose single, double or groups.");
+  const type = {"": "Single Elimination", single: "Single Elimination", double: "Double Elimination", groups: "Round Robin", lowlands: "Lowlands Playoffs"}[String(typePrompt.getResponseText() || "").trim().toLowerCase()];
+  if (!type) throw Error("Choose single, double, groups or lowlands.");
   const groups = type === "Round Robin";
-  const maxPrompt = ui.prompt("Maximum players", groups ? "Choose 2 to 64." : "Choose 8, 16, 32 or 64.", ui.ButtonSet.OK_CANCEL);
+  const lowlands = type === "Lowlands Playoffs";
+  const maxPrompt = ui.prompt("Maximum players", lowlands ? "Lowlands Playoffs always uses 16 players; enter 16." : (groups ? "Choose 2 to 64." : "Choose 8, 16, 32 or 64."), ui.ButtonSet.OK_CANCEL);
   if (maxPrompt.getSelectedButton() !== ui.Button.OK) return;
   const maximum = Number(maxPrompt.getResponseText());
-  if (groups ? !(Number.isInteger(maximum) && maximum >= 2 && maximum <= 64) : ![8, 16, 32, 64].includes(maximum)) {
-    throw Error(groups ? "Maximum players must be 2 to 64." : "Maximum players must be 8, 16, 32 or 64.");
+  if (lowlands ? maximum !== 16 : (groups ? !(Number.isInteger(maximum) && maximum >= 2 && maximum <= 64) : ![8, 16, 32, 64].includes(maximum))) {
+    throw Error(lowlands ? "Lowlands Playoffs requires exactly 16 players." : (groups ? "Maximum players must be 2 to 64." : "Maximum players must be 8, 16, 32 or 64."));
   }
   const visibilityPrompt = ui.prompt("Visibility", "public or hidden (empty = public). Hidden: a practice run that stays off the website and public Discord channels.", ui.ButtonSet.OK_CANCEL);
   if (visibilityPrompt.getSelectedButton() !== ui.Button.OK) return;
@@ -182,17 +188,13 @@ function createTournament() {
   const first = publicSs.getSheets()[0]; first.setName("Bracket"); publicSs.insertSheet("Schedule");
   const tournamentsSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   const newRow = tournamentNextRow_(tournamentsSheet);
-  const row = [id, name, type, "Registration", maximum, "", 3, "", "", "",
+  const row = [id, name, type, "Registration", maximum, maximum, 3, "", "", "",
     publicSs.getId(), publicSs.getUrl(), "", new Date(), "", "", "", "", "", tournamentNewLiquipediaBracketId_(),
     '=IF(R' + newRow + '="","",R' + newRow + '-TIME(1,0,0))',
-    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', true, "", ""];
+    '=IF(R' + newRow + '="","",R' + newRow + '-TIME(0,5,0))', !lowlands, "", ""];
   tournamentsSheet.getRange(newRow, 1, 1, row.length).setValues([row]);
   tournamentsSheet.getRange(newRow, TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Visibility") + 1).setValue(visibility);
-  tournamentSetConfig_("Active Tournament ID", id);
-  tournamentSetConfig_("Tournament Name", name);
-  tournamentSetConfig_("Tournament Status", "Registration");
-  tournamentSetConfig_("Registration Status", "Open");
-  tournamentSetConfig_("Maximum Players", maximum);
+  tournamentSyncConfigFromActive_(tournamentById_(id), "Open");
   syncTournamentPublicSpreadsheet();
   tournamentLog_("sheet", "create_tournament", "", name + " · " + publicSs.getUrl());
   ui.alert("Tournament created", name + " is now active.\n\nPublic bracket:\n" + publicSs.getUrl(), ui.ButtonSet.OK);
@@ -207,12 +209,27 @@ function switchActiveTournament() {
   const id = String(prompt.getResponseText() || "").trim();
   const tournament = tournamentById_(id);
   if (!tournament) throw Error("Unknown Tournament ID: " + id);
-  tournamentSetConfig_("Active Tournament ID", id);
-  tournamentSetConfig_("Tournament Name", tournament["Tournament Name"]);
-  tournamentSetConfig_("Tournament Status", tournament.Status);
-  tournamentSetConfig_("Maximum Players", tournament["Maximum Players"]);
-  tournamentSetConfig_("Rules URL", tournament["Rules URL"] || "");
+  tournamentSyncConfigFromActive_(tournament, String(tournament.Status || "").toLowerCase() === "registration" ? "Open" : "Closed");
   SpreadsheetApp.getActiveSpreadsheet().toast(tournament["Tournament Name"] + " is now active.", "GeoNederland Tournament", 6);
+}
+
+function configureLowlandsLeaguePlayoffs() {
+  setupTournamentSystem();
+  const tournament = tournamentActive_(), ui = SpreadsheetApp.getUi();
+  const answer = ui.alert(
+    "Configure Lowlands Playoffs?",
+    "This sets the active tournament to the fixed 16-player Lowlands format: seeds 9–16 start in round 1, seeds 5–8 in round 2, and seeds 1–4 in the quarterfinals. Every match is marked as a stream match. Existing matches are not overwritten.",
+    ui.ButtonSet.YES_NO,
+  );
+  if (answer !== ui.Button.YES) return;
+  tournamentUpdateRow_(tournament, {
+    Type: "Lowlands Playoffs", "Maximum Players": 16, "Bracket Size": 16,
+    "Auto-generate Official Bracket": false,
+  });
+  tournamentSyncConfigFromActive_(tournament);
+  if (tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"])) tournamentSyncPublicSpreadsheet_(tournament);
+  tournamentLog_("sheet", "configure_lowlands_playoffs", "", tournament["Tournament Name"], tournament["Tournament ID"]);
+  ui.alert("Lowlands format saved", "Add the 16 players in Tournament Players, give them unique seeds 1–16, then generate the official bracket.", ui.ButtonSet.OK);
 }
 
 function archiveActiveTournament() {
@@ -237,12 +254,7 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
     .slice()
     .sort((a, b) => a.order - b.order);
   if (!sorted.length) {
-    [["Round of 32", 16], ["Round of 16", 8], ["Quarterfinal", 4], ["Semifinal", 2], ["Final", 1]].forEach(([round, count]) => {
-      for (let index = 0; index < count; index++) sorted.push({
-        round, order: sorted.length + 1, match_id: "TBD", player1: "TBD", player2: "TBD",
-        series_score: "0-0", status: "Waiting for players", highlighted: false, winner: "",
-      });
-    });
+    tournamentPlaceholderMatches_(config).forEach((match) => sorted.push(match));
   }
   const roundNames = [];
   sorted.forEach((match) => { if (!roundNames.includes(match.round)) roundNames.push(match.round); });
@@ -505,6 +517,30 @@ function tournamentEnsureConfig_(setting, value, notes) {
   if (!tournamentRows_(sheet).some((row) => String(row.Setting) === setting)) sheet.appendRow([setting, value, notes || ""]);
 }
 
+function tournamentSyncConfigFromActive_(tournament, registrationStatus) {
+  if (!tournament) return;
+  const status = String(tournament.Status || "Setup");
+  const registrationOpen = registrationStatus || tournamentConfig_()["Registration Status"] || "Closed";
+  const fields = {
+    "Active Tournament ID": tournament["Tournament ID"],
+    "Tournament Name": tournament["Tournament Name"],
+    "Tournament Status": status,
+    "Registration Status": registrationOpen,
+    "Maximum Players": tournament["Maximum Players"],
+    "Bracket Size": tournament["Bracket Size"] || tournament["Maximum Players"],
+    "Bracket Type": tournament.Type || "Single Elimination",
+    "Default Best Of": tournament["Default Best Of"] || 3,
+    "Preset 1": tournament["Preset 1"] || "",
+    "Preset 2": tournament["Preset 2"] || "",
+    "Preset 3": tournament["Preset 3"] || "",
+    "Public Spreadsheet ID": tournament["Public Spreadsheet ID"] || "",
+    "Public Bracket URL": tournament["Public Bracket URL"] || "",
+    "Stream URL": tournament["Stream URL"] || "",
+    "Rules URL": tournament["Rules URL"] || "",
+  };
+  Object.entries(fields).forEach(([setting, value]) => tournamentSetConfig_(setting, value));
+}
+
 function tournamentEnsureInitialTournament_() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
   if (tournamentRows_(sheet).length) return;
@@ -517,6 +553,17 @@ function tournamentEnsureInitialTournament_() {
     "", "", "", tournamentNewLiquipediaBracketId_(), "", "", false, "", "",
   ];
   sheet.getRange(tournamentNextRow_(sheet), 1, 1, values.length).setValues([values]);
+}
+
+function tournamentEnsureBracketSizes_() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.TOURNAMENTS);
+  const column = TOURNAMENT.HEADERS.TOURNAMENTS.indexOf("Bracket Size") + 1;
+  tournamentRows_(sheet).forEach((tournament) => {
+    if (Number(tournament["Bracket Size"] || 0) > 0) return;
+    const size = tournamentIsLowlandsPlayoffs_(tournament) ? 16 : Number(tournament["Maximum Players"] || 32);
+    sheet.getRange(tournament.__row, column).setValue(size);
+    tournament["Bracket Size"] = size;
+  });
 }
 
 // Liquipedia requires bracket IDs of exactly ten letters or digits.
@@ -601,7 +648,9 @@ function tournamentActive_() {
 }
 
 function tournamentUpdateActive_(changes) {
-  return tournamentUpdateRow_(tournamentActive_(), changes);
+  const tournament = tournamentUpdateRow_(tournamentActive_(), changes);
+  tournamentSyncConfigFromActive_(tournament);
+  return tournament;
 }
 
 function tournamentUpdateRow_(row, changes) {
@@ -777,10 +826,58 @@ function tournamentPrepareBracketPlayers_(players, label) {
     .map((player, index) => Object.assign({}, player, {__bracketSeed: index + 1}));
 }
 
+function tournamentIsLowlandsPlayoffs_(tournament) {
+  return String((tournament || {}).Type || "").toLowerCase().includes("lowlands");
+}
+
+function tournamentBuildLowlandsPlayoffs_(tournament, players) {
+  if (players.length !== 16) throw Error("Lowlands Playoffs requires exactly 16 seeded players.");
+  const id = String(tournament["Tournament ID"]), settings = tournamentBracketSettings_(tournament);
+  const seeded = {}, rows = [];
+  players.forEach((player) => seeded[Number(player.__bracketSeed)] = String(player.Player));
+  const missing = Array.from({length: 16}, (_, index) => index + 1).filter((seed) => !seeded[seed]);
+  if (missing.length) throw Error("Lowlands Playoffs requires consecutive seeds 1–16. Missing: " + missing.join(", "));
+  let order = 1;
+  const add = (input) => rows.push(tournamentMatchRow_(Object.assign({
+    order: order++, bestOf: settings.bestOf, presets: settings.presets,
+    highlighted: true, tournamentId: id,
+  }, input)));
+  const roundOne = [[9, 16], [12, 13], [10, 15], [11, 14]];
+  const roundTwoSeeds = [8, 5, 7, 6], quarterfinalSeeds = [1, 4, 2, 3];
+  roundOne.forEach((pair, index) => add({
+    id: id + "-R1-M" + (index + 1), round: "Round 1",
+    player1: seeded[pair[0]], player2: seeded[pair[1]],
+    next: id + "-R2-M" + (index + 1), slot: 2,
+  }));
+  roundTwoSeeds.forEach((seed, index) => add({
+    id: id + "-R2-M" + (index + 1), round: "Round 2",
+    player1: seeded[seed], next: id + "-R3-M" + (index + 1), slot: 2,
+  }));
+  quarterfinalSeeds.forEach((seed, index) => add({
+    id: id + "-R3-M" + (index + 1), round: "Quarterfinal",
+    player1: seeded[seed], next: id + "-R4-M" + (Math.floor(index / 2) + 1), slot: index % 2 + 1,
+  }));
+  for (let index = 0; index < 2; index++) add({
+    id: id + "-R4-M" + (index + 1), round: "Semifinal",
+    next: id + "-R5-M1", slot: index + 1,
+  });
+  add({id: id + "-R5-M1", round: "Final"});
+  return {rows, bracketSize: 16, playerCount: 16};
+}
+
 function tournamentBuildBracket_(tournament, sourcePlayers, label) {
+  if (tournamentIsLowlandsPlayoffs_(tournament)) {
+    const seeds = new Set(sourcePlayers.map((player) => Number(player.Seed)));
+    const missing = Array.from({length: 16}, (_, index) => index + 1).filter((seed) => !seeds.has(seed));
+    const outside = [...seeds].filter((seed) => !Number.isInteger(seed) || seed < 1 || seed > 16);
+    if (sourcePlayers.length !== 16 || missing.length || outside.length) {
+      throw Error("Lowlands Playoffs requires exactly 16 players with consecutive seeds 1–16.");
+    }
+  }
   const players = tournamentPrepareBracketPlayers_(sourcePlayers, label);
   const maximumPlayers = Math.min(64, Number(tournament["Maximum Players"] || 64));
   if (players.length > maximumPlayers) throw Error("This tournament supports at most " + maximumPlayers + " players.");
+  if (tournamentIsLowlandsPlayoffs_(tournament)) return tournamentBuildLowlandsPlayoffs_(tournament, players);
   const format = tournamentBracketFormat_(tournament);
   if (format === "round-robin") return tournamentBuildRoundRobin_(tournament, players);
   if (format === "double-elimination") {
@@ -824,7 +921,10 @@ function tournamentGenerateOfficialBracket_(tournament, options) {
   const settings = options || {}, id = String(tournament["Tournament ID"]), ss = SpreadsheetApp.getActiveSpreadsheet();
   const matchesSheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), oldMatches = tournamentRowsFor_(matchesSheet, id);
   if (oldMatches.length && !settings.replaceExisting) throw Error("Er bestaat al een officiële bracket; automatisch overschrijven is geblokkeerd.");
-  const definition = tournamentBuildBracket_(tournament, tournamentPlayersFor_(id, true), "checked-in");
+  const useRegistered = tournamentIsLowlandsPlayoffs_(tournament);
+  const players = tournamentPlayersFor_(id, !useRegistered);
+  tournamentRefreshBracketSize_(id, useRegistered ? "registered" : "checked-in");
+  const definition = tournamentBuildBracket_(tournament, players, useRegistered ? "registered" : "checked-in");
   for (let index = oldMatches.length - 1; index >= 0; index--) matchesSheet.deleteRow(oldMatches[index].__row);
   const rows = definition.rows;
   matchesSheet.getRange(tournamentNextRow_(matchesSheet), 1, rows.length, TOURNAMENT.HEADERS.MATCHES.length).setValues(rows);
@@ -901,6 +1001,52 @@ function tournamentBracketFormat_(tournament) {
   if (type.includes("double")) return "double-elimination";
   if (type.includes("round robin") || type.includes("round-robin") || type.includes("group")) return "round-robin";
   return "single-elimination";
+}
+
+function tournamentNextBracketSize_(count, maximum) {
+  const limit = Math.max(2, Math.min(64, Number(maximum || 64)));
+  const players = Math.max(2, Math.min(limit, Number(count || 0)));
+  let size = 2;
+  while (size < players && size < 64) size *= 2;
+  return Math.min(size, limit);
+}
+
+function tournamentRefreshBracketSize_(tournamentId, source) {
+  const tournament = tournamentById_(tournamentId);
+  if (!tournament) return 0;
+  const id = String(tournament["Tournament ID"]), ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (tournamentRowsFor_(ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), id).length) {
+    return Number(tournament["Bracket Size"] || tournament["Maximum Players"] || 0);
+  }
+  const maximum = Number(tournament["Maximum Players"] || 64);
+  const eligible = tournamentPlayersFor_(id, source === "checked-in").length;
+  const size = tournamentIsLowlandsPlayoffs_(tournament) ? 16 : tournamentNextBracketSize_(eligible, maximum);
+  if (Number(tournament["Bracket Size"] || 0) !== size) tournamentUpdateRow_(tournament, {"Bracket Size": size});
+  if (id === tournamentActiveId_()) tournamentSyncConfigFromActive_(tournament);
+  return size;
+}
+
+function tournamentPlaceholderMatches_(config) {
+  if (tournamentIsLowlandsPlayoffs_(config)) {
+    const players = Array.from({length: 16}, (_, index) => ({
+      Player: "TBD", Seed: index + 1, __bracketSeed: index + 1,
+    }));
+    return tournamentBuildLowlandsPlayoffs_(config, players).rows.map(tournamentMatchValuesToPublic_);
+  }
+  const maximum = Number(config["Maximum Players"] || 32);
+  const requested = Number(config["Bracket Size"] || maximum);
+  const size = tournamentNextBracketSize_(requested, maximum);
+  const rounds = Math.log(size) / Math.log(2), matches = [];
+  let order = 1;
+  for (let round = 1; round <= rounds; round++) {
+    const count = size / Math.pow(2, round);
+    for (let index = 0; index < count; index++) matches.push({
+      round: tournamentRoundName_(rounds, round), order: order++, match_id: "TBD",
+      player1: "TBD", player2: "TBD", series_score: "0-0",
+      status: "Waiting for players", highlighted: false, winner: "",
+    });
+  }
+  return matches;
 }
 
 function tournamentBracketSizeFor_(tournament, playerCount) {
@@ -1643,6 +1789,7 @@ function tournamentRegister_(payload) {
     "Registered", false, own && own["Registered At"] || now, "", now, own && own.Notes || "", tournamentActiveId_()];
   const rowNumber = own ? own.__row : tournamentNextRow_(sheet);
   sheet.getRange(rowNumber, 1, 1, TOURNAMENT.HEADERS.PLAYERS.length).setValues([values]);
+  tournamentRefreshBracketSize_(tournament["Tournament ID"], "registered");
   tournamentLog_(identity.discordId, own ? "registration_updated" : "registered", "", player + " · " + country);
   return tournamentPlayerPublic_(Object.assign({__row: rowNumber}, Object.fromEntries(TOURNAMENT.HEADERS.PLAYERS.map((header, index) => [header, values[index]]))), !own);
 }
@@ -1659,6 +1806,7 @@ function tournamentCheckIn_(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), now = new Date();
   sheet.getRange(row.__row, 7, 1, 5).setValues([["Checked In", true, row["Registered At"] || now, now, now]]);
   row.Status = "Checked In"; row["Checked In"] = true; row["Checked In At"] = now;
+  tournamentRefreshBracketSize_(tournamentActiveId_(), "checked-in");
   tournamentLog_(identity.discordId, "checked_in", "", row.Player);
   return tournamentPlayerPublic_(row, false);
 }
@@ -1669,6 +1817,7 @@ function tournamentUnregister_(payload) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(TOURNAMENT.SHEETS.PLAYERS), now = new Date();
   sheet.getRange(row.__row, 7, 1, 5).setValues([["Withdrawn", false, row["Registered At"] || now, "", now]]);
   row.Status = "Withdrawn"; row["Checked In"] = false;
+  tournamentRefreshBracketSize_(tournamentActiveId_(), "registered");
   tournamentLog_(identity.discordId, "withdrawn", "", row.Player);
   return tournamentPlayerPublic_(row, false);
 }
