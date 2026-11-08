@@ -211,6 +211,20 @@ test("automatic bracket size starts small and grows to the configured maximum", 
   assert.equal(context.tournamentNextBracketSize_(40, 32), 32);
 });
 
+test("staggered Lowlands rounds keep four valid row positions until the semifinals", () => {
+  const context = load();
+  const first = [7, 15, 23, 31];
+  const roundTwo = Array.from(context.tournamentNextRoundCenters_(first, 4));
+  const quarterfinals = Array.from(context.tournamentNextRoundCenters_(roundTwo, 4));
+  const semifinals = Array.from(context.tournamentNextRoundCenters_(quarterfinals, 2));
+  const final = Array.from(context.tournamentNextRoundCenters_(semifinals, 1));
+  assert.deepEqual(roundTwo, first);
+  assert.deepEqual(quarterfinals, first);
+  assert.deepEqual(semifinals, [11, 27]);
+  assert.deepEqual(final, [19]);
+  [...roundTwo, ...quarterfinals, ...semifinals, ...final].forEach((row) => assert.ok(row >= 1));
+});
+
 const match = (id, p1, p2, winner) => ({"Match ID": id, "Player 1": p1, "Player 2": p2, Winner: winner, "Tournament ID": id.split("-R")[0]});
 const oq1Matches = [
   match("oq1-R1-M1", "Anna", "Hans", "Anna"), match("oq1-R1-M2", "Bas", "Cor", "Bas"),

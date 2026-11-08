@@ -300,11 +300,12 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
     });
 
     if (roundIndex < rounds.length - 1) {
-      const nextCenters = [];
-      for (let index = 0; index < centers.length; index += 2) {
-        const upper = centers[index], lower = centers[index + 1] === undefined ? upper : centers[index + 1];
-        const parent = Math.round((upper + lower) / 2);
-        nextCenters.push(parent);
+      const nextCount = Math.max(1, rounds[roundIndex + 1].length);
+      const nextCenters = tournamentNextRoundCenters_(centers, nextCount);
+      for (let index = 0; index < nextCount; index++) {
+        const from = Math.floor(index * centers.length / nextCount);
+        const to = Math.max(from, Math.floor((index + 1) * centers.length / nextCount) - 1);
+        const upper = centers[from], lower = centers[to];
         const connector = sheet.getRange(Math.min(upper, lower), startColumn + 3, Math.max(1, Math.abs(lower - upper)), 1);
         connector.setBorder(null, null, null, true, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
         sheet.getRange(upper, startColumn + 3).setBorder(true, null, null, null, null, null, "#01397a", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
@@ -316,6 +317,15 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
 
   sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
   sheet.setConditionalFormatRules([]);
+}
+
+function tournamentNextRoundCenters_(centers, nextCount) {
+  if (!centers.length || nextCount < 1) return [];
+  return Array.from({length: nextCount}, (_, index) => {
+    const from = Math.min(centers.length - 1, Math.floor(index * centers.length / nextCount));
+    const to = Math.min(centers.length - 1, Math.max(from, Math.floor((index + 1) * centers.length / nextCount) - 1));
+    return Math.round((centers[from] + centers[to]) / 2);
+  });
 }
 
 function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
