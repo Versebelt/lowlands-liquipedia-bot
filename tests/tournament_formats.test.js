@@ -269,3 +269,12 @@ test("the Type column picks the format", () => {
   assert.equal(context.tournamentBracketFormat_({Type: "Lowlands Playoffs"}), "single-elimination");
   assert.equal(context.tournamentBracketFormat_(null), "single-elimination");
 });
+
+test("editable Tournament homepage settings map back to the active tournament row", () => {
+  const context = load();
+  assert.equal(context.tournamentConfigTournamentField_("Stream URL"), "Stream URL");
+  assert.equal(context.tournamentConfigTournamentField_("Rules URL"), "Rules URL");
+  assert.equal(context.tournamentConfigTournamentField_("Bracket Type"), "Type");
+  assert.equal(context.tournamentConfigTournamentField_("Registration Status"), "");
+  assert.equal(context.tournamentConfigTournamentField_("Unknown"), "");
+});
