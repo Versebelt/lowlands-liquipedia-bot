@@ -1070,7 +1070,7 @@ function tournamentMatchRow_(input) {
     input.bestOf || 3, input.presets[0] || "", input.presets[1] || "", input.presets[2] || "",
     Boolean(input.highlighted), false, false, false, status, "", "0-0", "",
     input.next || "", input.slot || "", "", "", "", new Date(), input.tournamentId || tournamentActiveId_(),
-    input.loser || "", input.loserSlot || "",
+    input.loser || "", input.loserSlot || "", "",
   ];
 }
 
@@ -1346,8 +1346,31 @@ function tournamentFormat_(ss) {
   matches.setColumnWidth(14, 150); matches.setColumnWidth(15, 240); matches.setColumnWidth(21, 240);
 }
 
+// Per-execution memo of sheet rows, only switched on for read-only web requests (see tournamentReadOnly_).
+// Apps Script globals live for one execution, so this never outlives a single request.
+let TOURNAMENT_READ_MEMO_ = null;
+
+function tournamentReadOnly_(fn) {
+  TOURNAMENT_READ_MEMO_ = {};
+  try {
+    return fn();
+  } finally {
+    TOURNAMENT_READ_MEMO_ = null;
+  }
+}
+
 function tournamentRows_(sheet) {
-  if (!sheet || sheet.getLastRow() < 2) return [];
+  if (!sheet) return [];
+  if (TOURNAMENT_READ_MEMO_) {
+    const name = sheet.getName();
+    if (!TOURNAMENT_READ_MEMO_[name]) TOURNAMENT_READ_MEMO_[name] = tournamentReadRows_(sheet);
+    return TOURNAMENT_READ_MEMO_[name].slice();
+  }
+  return tournamentReadRows_(sheet);
+}
+
+function tournamentReadRows_(sheet) {
+  if (sheet.getLastRow() < 2) return [];
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
   const identityHeaders = {
     [TOURNAMENT.SHEETS.CONFIG]: "Setting",
@@ -1399,15 +1422,17 @@ function doGet(e) {
     tournamentAuthorize_(e && e.parameter && e.parameter.secret);
     const action = String(e.parameter.action || "health");
     if (action === "health") return tournamentJson_({ok: true, service: "geonederland-tournament"});
-    if (action === "bracket") return tournamentJson_({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()});
+    if (action === "bracket") return tournamentJson_(tournamentReadOnly_(() => ({ok: true, config: Object.assign({}, tournamentConfig_(), tournamentActive_()), matches: tournamentPublicMatches_()})));
     if (action === "match") return tournamentJson_({ok: true, match: tournamentMatchForUser_(e.parameter.discord_user_id, e.parameter.discord_name, e.parameter.discord_display_name)});
     // include_hidden=1 (broadcast app): also Hidden tournaments, marked hidden: true. The website never asks for them.
     const includeHidden = String(e.parameter.include_hidden || "") === "1";
-    if (action === "public_index") return tournamentJson_({ok: true, tournaments: tournamentWebsiteIndex_(includeHidden), updated_at: tournamentWebsiteUpdatedAt_()});
-    if (action === "public_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, includeHidden)});
+    // Read-only actions: every sheet is read once per request instead of once per helper (the index used to re-read
+    // Players and Matches for every tournament).
+    if (action === "public_index") return tournamentJson_(tournamentReadOnly_(() => ({ok: true, tournaments: tournamentWebsiteIndex_(includeHidden), updated_at: tournamentWebsiteUpdatedAt_()})));
+    if (action === "public_tournament") return tournamentJson_(tournamentReadOnly_(() => ({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, includeHidden)})));
     // GeoNederland broadcast app: the public detail plus GeoGuessr user IDs, so the broadcast can put the right
     // players on the right side. Still behind the shared secret; never shown on the website.
-    if (action === "broadcast_tournament") return tournamentJson_({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, true), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)});
+    if (action === "broadcast_tournament") return tournamentJson_(tournamentReadOnly_(() => ({ok: true, tournament: tournamentWebsiteDetail_(e.parameter.tournament_id, true), geoguessr_ids: tournamentBroadcastIds_(e.parameter.tournament_id)})));
     throw Error("Unknown action: " + action);
   } catch (error) {
     return tournamentJson_({ok: false, error: String(error.message || error)});
@@ -2057,8 +2082,11 @@ function tournamentBroadcastIds_(tournamentId) {
  */
 function tournamentScoreText_(value) {
   if (Object.prototype.toString.call(value) !== "[object Date]" || isNaN(value.getTime())) return String(value === null || value === undefined ? "" : value).trim();
-  let locale = "";
-  try { locale = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetLocale() || ""; } catch (error) { locale = ""; }
+  let locale = TOURNAMENT_READ_MEMO_ ? TOURNAMENT_READ_MEMO_.__locale : undefined;
+  if (locale === undefined) {
+    try { locale = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetLocale() || ""; } catch (error) { locale = ""; }
+    if (TOURNAMENT_READ_MEMO_) TOURNAMENT_READ_MEMO_.__locale = locale;
+  }
   const day = value.getDate(), month = value.getMonth() + 1;
   return /^en_US/i.test(locale) ? month + "-" + day : day + "-" + month;
 }
