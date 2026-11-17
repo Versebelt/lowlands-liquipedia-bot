@@ -82,6 +82,15 @@ website results, or Liquipedia. Every included player needs a unique seed; when
 no-shows create gaps, the official bracket preserves the order and compresses the
 remaining seeds automatically.
 
+## Third-place match
+
+Lowlands Playoffs brackets include a `Third Place` match (`<tournament>-3P`). The two
+semifinal losers move there automatically, it is played before the final, and its
+result decides places 3 and 4. The public bracket draws it under the final and the
+Liquipedia export writes it as `RxMTP`. A bracket generated before this existed can
+get one with **Tournament Control → Add third-place match to active bracket**; already
+decided semifinals put their loser straight in.
+
 ## Manual seeding and bracket generation
 
 Enter a manual number in the `Seed` column for every checked-in player. Seeds

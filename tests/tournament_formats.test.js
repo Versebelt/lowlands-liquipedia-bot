@@ -176,13 +176,19 @@ test("Lowlands Playoffs uses staggered entry and streams every match", () => {
   const col = (name) => context.H.HEADERS.MATCHES.indexOf(name);
   assert.equal(bracketSize, 16);
   assert.equal(playerCount, 16);
-  assert.equal(rows.length, 15);
+  assert.equal(rows.length, 16);
   assert.deepEqual(Array.from(rows, (row) => row[col("Round")]), [
     "Round 1", "Round 1", "Round 1", "Round 1",
     "Round 2", "Round 2", "Round 2", "Round 2",
     "Quarterfinal", "Quarterfinal", "Quarterfinal", "Quarterfinal",
-    "Semifinal", "Semifinal", "Final",
+    "Semifinal", "Semifinal", "Third Place", "Final",
   ]);
+  // Semifinal losers drop into the third-place match, which is played before the final.
+  assert.deepEqual(Array.from(rows.slice(12, 14), (row) => [row[col("Loser Match ID")], row[col("Loser Slot")]]), [
+    ["ll-s2-3P", 1], ["ll-s2-3P", 2],
+  ]);
+  assert.equal(rows[14][col("Match ID")], "ll-s2-3P");
+  assert.ok(rows[14][col("Bracket Order")] < rows[15][col("Bracket Order")]);
   assert.deepEqual(Array.from(rows.slice(0, 4), (row) => [row[col("Player 1")], row[col("Player 2")]]), [
     ["P9", "P16"], ["P12", "P13"], ["P10", "P15"], ["P11", "P14"],
   ]);
@@ -192,6 +198,27 @@ test("Lowlands Playoffs uses staggered entry and streams every match", () => {
   const {open} = play(context, rows);
   assert.equal(open.length, 0);
   assert.equal(rows.at(-1)[col("Winner")], "P1");
+  assert.deepEqual([rows[14][col("Player 1")], rows[14][col("Player 2")], rows[14][col("Winner")]], ["P4", "P3", "P3"]);
+});
+
+test("final placements of Lowlands Playoffs take third and fourth from the third-place match", () => {
+  const tournament = {"Tournament ID": "ll-s2", Type: "Lowlands Playoffs", "Maximum Players": 16, "Bracket Size": 16};
+  const built = load().tournamentBuildBracket_(tournament, seededPlayers(16), "registered");
+  const context = load();
+  play(context, built.rows);
+  const headers = context.H.HEADERS.MATCHES;
+  const matches = built.rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index]])));
+  const placed = Array.from(load({tournaments: [tournament], matches}).tournamentPlacements_("ll-s2"));
+  // Without the third-place match P4 (lost the first semifinal) would come before P3.
+  assert.deepEqual(placed.slice(0, 4), ["P1", "P2", "P3", "P4"]);
+  assert.equal(placed.length, 16);
+});
+
+test("the third-place match is recognised by its ID or its round", () => {
+  const context = load();
+  assert.equal(context.tournamentIsThirdPlace_({"Match ID": "ll-s2-3P"}), true);
+  assert.equal(context.tournamentIsThirdPlace_({match_id: "x", round: "Third Place"}), true);
+  assert.equal(context.tournamentIsThirdPlace_({"Match ID": "ll-s2-R5-M1", Round: "Final"}), false);
 });
 
 test("Lowlands Playoffs rejects incomplete or non-consecutive manual seeding", () => {

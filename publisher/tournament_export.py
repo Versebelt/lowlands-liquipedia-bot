@@ -141,7 +141,7 @@ def validate_tournament(tournament: dict[str, Any]) -> int:
     matches = tournament.get("matches")
     if not isinstance(participants, list) or not isinstance(matches, list):
         raise TournamentExportError("Tournament participants or matches are missing.")
-    if len(matches) > size - 1:
+    if len([match for match in matches if not is_third_place(match)]) > size - 1:
         raise TournamentExportError("Tournament contains more matches than a single-elimination bracket permits.")
     bracket_id = str(tournament.get("liquipedia_bracket_id") or "")
     if not re.fullmatch(r"[A-Za-z0-9]{10}", bracket_id):
@@ -164,6 +164,13 @@ def participant_lines(tournament: dict[str, Any]) -> list[str]:
 
 
 MATCH_POSITION = re.compile(r"-R(\d+)-M(\d+)$")
+
+
+def is_third_place(match: Any) -> bool:
+    """The match for third place between the semifinal losers (match ID ending in -3P, or round "Third Place")."""
+    if not isinstance(match, dict):
+        return False
+    return str(match.get("match_id") or "").endswith("-3P") or str(match.get("round") or "").strip() == "Third Place"
 
 
 def match_position(match: dict[str, Any], round_index: int, match_index: int, size: int) -> tuple[int, int]:
@@ -192,6 +199,9 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
         tournament.get("matches", []),
         key=lambda match: int(match.get("order") or 0),
     )
+    # The third-place match is no round of the tree: Liquipedia gives it its own slot, RxMTP.
+    third_place = next((match for match in matches if is_third_place(match)), None)
+    matches = [match for match in matches if not is_third_place(match)]
     rounds: list[str] = []
     grouped: dict[str, list[dict[str, Any]]] = {}
     for match in matches:
@@ -205,6 +215,27 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
     if len(rounds) > expected_rounds:
         raise TournamentExportError("Tournament contains too many rounds for its bracket size.")
 
+    def match_lines(slot: str, match: dict[str, Any]) -> list[str]:
+        player1 = wiki_text(match.get("player1"))
+        player2 = wiki_text(match.get("player2"))
+        score1, score2 = parse_score(match.get("series_score"))
+        finished = bool(match.get("winner")) or str(match.get("status", "")).lower() in {
+            "complete", "completed", "finished"
+        }
+        date = match_date(match.get("scheduled_at"))
+        flag1 = player_countries.get(player1, "")
+        flag2 = player_countries.get(player2, "")
+        walkover = ""
+        if "BYE" in (player1, player2) and player1 != player2:
+            walkover = f" |winner={2 if player1 == 'BYE' else 1}"
+        return [
+            f"|{slot}={{{{Match",
+            f"    |opponent1={opponent(player1, flag1, score1)}",
+            f"    |opponent2={opponent(player2, flag2, score2)}",
+            f"    |finished={'true' if finished else 'false'}" + walkover + (f" |date={date}" if date else ""),
+            "}}",
+        ]
+
     bracket_id = str(tournament["liquipedia_bracket_id"])
     lines = ["==Results==", f"{{{{Bracket|Bracket/{size}|id={bracket_id}"]
     used: set[tuple[int, int]] = set()
@@ -216,27 +247,11 @@ def bracket_lines(tournament: dict[str, Any], size: int) -> list[str]:
             if position in used:
                 raise TournamentExportError(f"Two matches share bracket slot R{position[0]}M{position[1]}.")
             used.add(position)
-            player1 = wiki_text(match.get("player1"))
-            player2 = wiki_text(match.get("player2"))
-            score1, score2 = parse_score(match.get("series_score"))
-            finished = bool(match.get("winner")) or str(match.get("status", "")).lower() in {
-                "complete", "completed", "finished"
-            }
-            date = match_date(match.get("scheduled_at"))
-            flag1 = player_countries.get(player1, "")
-            flag2 = player_countries.get(player2, "")
-            walkover = ""
-            if "BYE" in (player1, player2) and player1 != player2:
-                walkover = f" |winner={2 if player1 == 'BYE' else 1}"
-            lines.extend(
-                [
-                    f"|R{position[0]}M{position[1]}={{{{Match",
-                    f"    |opponent1={opponent(player1, flag1, score1)}",
-                    f"    |opponent2={opponent(player2, flag2, score2)}",
-                    f"    |finished={'true' if finished else 'false'}" + walkover + (f" |date={date}" if date else ""),
-                    "}}",
-                ]
-            )
+            lines.extend(match_lines(f"R{position[0]}M{position[1]}", match))
+    if third_place is not None:
+        lines.append("")
+        lines.append("<!-- Third Place -->")
+        lines.extend(match_lines("RxMTP", third_place))
     lines.append("}}")
     return lines
 
