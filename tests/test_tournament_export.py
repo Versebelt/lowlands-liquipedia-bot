@@ -117,6 +117,23 @@ class TournamentExportTests(unittest.TestCase):
         with self.assertRaisesRegex(TournamentExportError, "does not fit"):
             build_wikicode(dict(TOURNAMENT, matches=[dict(TOURNAMENT["matches"][0], match_id="t-R1-M3")]))
 
+    def test_third_place_match_gets_its_own_slot(self):
+        third = {
+            "order": 3,
+            "match_id": "t-3P",
+            "round": "Third Place",
+            "player1": "Matedu",
+            "player2": "Trekk",
+            "series_score": "2-0",
+            "winner": "Matedu",
+            "status": "Complete",
+        }
+        matches = TOURNAMENT["matches"][:2] + [third] + TOURNAMENT["matches"][2:]
+        text = build_wikicode(dict(TOURNAMENT, matches=matches))
+        self.assertIn("|RxMTP={{Match\n    |opponent1={{SoloOpponent|Matedu", text)
+        self.assertIn("|R2M1={{Match", text)
+        self.assertEqual(text.count("{{Match"), 4)
+
     def test_bye_is_a_walkover_for_the_other_player(self):
         bye = dict(TOURNAMENT["matches"][0], player2="BYE", series_score="0-0")
         text = build_wikicode(dict(TOURNAMENT, matches=[bye]))

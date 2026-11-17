@@ -18,6 +18,7 @@ function onOpen() {
     .addItem("Validate player seeding", "validateTournamentSeeding")
     .addItem("Generate preview bracket — all registered", "generateTournamentPreviewBracket")
     .addItem("Generate official bracket — checked-in", "generateTournamentBracket")
+    .addItem("Add third-place match to active bracket", "addTournamentThirdPlaceMatch")
     .addItem("Run bracket automation now", "runTournamentBracketAutomation")
     .addItem("Sync Public bracket", "syncTournamentPublicSpreadsheet")
     .addSeparator()
@@ -251,10 +252,13 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
     tournamentRenderPublicSections_(sheet, config, matches, format);
     return;
   }
-  const sorted = matches
+  const listed = matches
     .filter((match) => String(match.match_id || "").trim() || String(match.round || "").trim())
     .slice()
     .sort((a, b) => a.order - b.order);
+  // The third-place match is no round of the tree: it is drawn on its own, under the final.
+  const thirdPlace = listed.find(tournamentIsThirdPlace_) || null;
+  const sorted = listed.filter((match) => !tournamentIsThirdPlace_(match));
   if (!sorted.length) {
     tournamentPlaceholderMatches_(config).forEach((match) => sorted.push(match));
   }
@@ -264,7 +268,7 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   // Up to eight players reads best from left to right. From sixteen players
   // onwards, split the bracket into two halves that converge on a centre final.
   if (rounds.length > 1 && rounds[0].length > 4) {
-    tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames);
+    tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames, thirdPlace);
     return;
   }
   const finalMatch = rounds.length ? rounds[rounds.length - 1][0] : null;
@@ -275,7 +279,8 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
   }]);
 
   const firstRoundCount = Math.max(1, rounds[0].length), totalColumns = Math.max(3, rounds.length * 4 - 1);
-  const totalRows = Math.max(16, 8 + firstRoundCount * 8);
+  const thirdPlaceTop = 7 + (firstRoundCount - 1) * 8 + 6;
+  const totalRows = Math.max(16, 8 + firstRoundCount * 8, thirdPlace ? thirdPlaceTop + 5 : 0);
   sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
   sheet.clear(); sheet.setHiddenGridlines(true); sheet.setFrozenRows(3);
   sheet.getRange(1, 1, totalRows, totalColumns).setBackground("#f3f0e9").setFontFamily("Arial").setFontColor("#102335");
@@ -316,9 +321,16 @@ function tournamentRenderPublicBracket_(sheet, config, matches) {
       centers = nextCenters;
     }
   });
+  if (thirdPlace && rounds.length > 1) tournamentDrawThirdPlace_(sheet, 1 + (rounds.length - 2) * 4, thirdPlaceTop, thirdPlace);
 
   sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
   sheet.setConditionalFormatRules([]);
+}
+
+function tournamentDrawThirdPlace_(sheet, startColumn, topRow, match) {
+  sheet.getRange(topRow - 1, startColumn, 1, 3).merge().setValue("THIRD PLACE")
+    .setBackground("#01397a").setFontColor("#ffffff").setFontWeight("bold").setHorizontalAlignment("center");
+  tournamentDrawBracketMatch_(sheet, startColumn, topRow, match, false, "");
 }
 
 function tournamentNextRoundCenters_(centers, nextCount) {
@@ -330,10 +342,10 @@ function tournamentNextRoundCenters_(centers, nextCount) {
   });
 }
 
-function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
+function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames, thirdPlace) {
   const sideRounds = rounds.length - 1, groupWidth = 4, centerColumn = sideRounds * groupWidth + 1;
   const totalColumns = centerColumn * 2 + 1, firstSideCount = Math.max(1, Math.ceil(rounds[0].length / 2));
-  const totalRows = Math.max(24, 10 + firstSideCount * 8);
+  const totalRows = Math.max(24, 10 + firstSideCount * 8) + (thirdPlace ? 12 : 0);
   if (sheet.getMaxColumns() < totalColumns) sheet.insertColumnsAfter(sheet.getMaxColumns(), totalColumns - sheet.getMaxColumns());
   if (sheet.getMaxRows() < totalRows) sheet.insertRowsAfter(sheet.getMaxRows(), totalRows - sheet.getMaxRows());
   sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
@@ -369,6 +381,7 @@ function tournamentRenderMirroredBracket_(sheet, config, rounds, roundNames) {
   const champion = {round: "Champion", match_id: "", player1: finalMatch.winner || "TBD", player2: "", status: finalMatch.status === "Complete" ? "Tournament winner" : "To be decided", winner: finalMatch.winner || ""};
   tournamentDrawBracketMatch_(sheet, centerColumn, finalCenter + 5, champion, true);
   sheet.getRange(finalCenter + 3, centerColumn + 1, 3, 1).setBorder(null, true, null, null, null, null, "#f47806", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  if (thirdPlace) tournamentDrawThirdPlace_(sheet, centerColumn, finalCenter + 11, thirdPlace);
   [180, 70, 70].forEach((width, offset) => sheet.setColumnWidth(centerColumn + offset, width));
   sheet.setRowHeight(1, 42); sheet.setRowHeight(2, 28); sheet.setRowHeight(4, 28);
   sheet.setConditionalFormatRules([]);
@@ -940,9 +953,65 @@ function tournamentBuildLowlandsPlayoffs_(tournament, players) {
   for (let index = 0; index < 2; index++) add({
     id: id + "-R4-M" + (index + 1), round: "Semifinal",
     next: id + "-R5-M1", slot: index + 1,
+    loser: id + TOURNAMENT_THIRD_PLACE_SUFFIX, loserSlot: index + 1,
   });
+  // The two semifinal losers play for third place, before the final.
+  add({id: id + TOURNAMENT_THIRD_PLACE_SUFFIX, round: TOURNAMENT_THIRD_PLACE_ROUND});
   add({id: id + "-R5-M1", round: "Final"});
   return {rows, bracketSize: 16, playerCount: 16};
+}
+
+// Third-place match: the semifinal losers play for third place (Lowlands Playoffs, or added to an existing
+// single-elimination bracket from the menu). Its ID has no -R<n>-M<n> slot on purpose, so everything that reads the
+// bracket tree from the match IDs (final placements, the Liquipedia slots) keeps seeing the same tree.
+const TOURNAMENT_THIRD_PLACE_SUFFIX = "-3P";
+const TOURNAMENT_THIRD_PLACE_ROUND = "Third Place";
+
+function tournamentIsThirdPlace_(match) {
+  const value = match || {};
+  const id = String(value["Match ID"] || value.match_id || ""), round = String(value.Round || value.round || "");
+  return id.endsWith(TOURNAMENT_THIRD_PLACE_SUFFIX) || round === TOURNAMENT_THIRD_PLACE_ROUND;
+}
+
+function addTournamentThirdPlaceMatch() {
+  setupTournamentSystem();
+  const message = tournamentAddThirdPlace_(tournamentActive_(), "sheet");
+  SpreadsheetApp.getActiveSpreadsheet().toast(message, "GeoNederland Tournament", 6);
+}
+
+// Adds the third-place match to a bracket that was generated without one. Semifinals that are already decided put
+// their loser straight in; open semifinals send the loser there when the result comes in.
+function tournamentAddThirdPlace_(tournament, actor) {
+  const id = String(tournament["Tournament ID"]), ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(TOURNAMENT.SHEETS.MATCHES), rows = tournamentRowsFor_(sheet, id);
+  if (rows.some(tournamentIsThirdPlace_)) return "This bracket already has a third-place match.";
+  if (tournamentBracketFormat_(tournament) !== "single-elimination") throw Error("A third-place match only fits a single-elimination bracket.");
+  const semifinals = rows.filter((row) => String(row.Round) === "Semifinal")
+    .sort((a, b) => String(a["Match ID"]).localeCompare(String(b["Match ID"])));
+  if (semifinals.length !== 2) throw Error("A third-place match needs exactly two semifinals; this bracket has " + semifinals.length + ".");
+  const final = rows.find((row) => String(row.Round) === "Final");
+  const loserOf = (row) => !row.Winner ? "" : String(row["Player 1"]) === String(row.Winner) ? String(row["Player 2"]) : String(row["Player 1"]);
+  const settings = tournamentBracketSettings_(tournament), thirdId = id + TOURNAMENT_THIRD_PLACE_SUFFIX;
+  const finalOrder = final ? Number(final["Bracket Order"]) || rows.length : rows.length + 1;
+  const row = tournamentMatchRow_({
+    id: thirdId, round: TOURNAMENT_THIRD_PLACE_ROUND, order: finalOrder, bestOf: settings.bestOf, presets: settings.presets,
+    player1: loserOf(semifinals[0]), player2: loserOf(semifinals[1]),
+    highlighted: semifinals.some((semi) => tournamentBool_(semi.Highlighted)), tournamentId: id,
+  });
+  sheet.getRange(tournamentNextRow_(sheet), 1, 1, TOURNAMENT.HEADERS.MATCHES.length).setValues([row]);
+  semifinals.forEach((semi, index) => {
+    semi.__sheet = sheet;
+    tournamentWriteMatch_(semi, {"Loser Match ID": thirdId, "Loser Slot": index + 1});
+  });
+  // Played before the final, so it comes first in the run of show.
+  if (final) {
+    final.__sheet = sheet;
+    tournamentWriteMatch_(final, {"Bracket Order": finalOrder + 1});
+  }
+  tournamentFormat_(ss);
+  tournamentLog_(actor || "sheet", "add_third_place", thirdId, "Third-place match added", id);
+  if (tournamentSpreadsheetId_(tournament["Public Spreadsheet ID"])) tournamentSyncPublicSpreadsheet_(tournament);
+  return "Third-place match added.";
 }
 
 function tournamentBuildBracket_(tournament, sourcePlayers, label) {
@@ -1494,6 +1563,11 @@ function tournamentPlacements_(tournamentId) {
   const final = finals.length === 1 ? finals[0] : null;
   if (!final || !final.winner) return [];
   const placed = [final.winner, final.p1 === final.winner ? final.p2 : final.p1];
+  const third = tournamentRowsFor_(sheet, tournamentId).find(tournamentIsThirdPlace_);
+  if (third && third.Winner) {
+    const winner = String(third.Winner);
+    placed.push(winner, String(third["Player 1"]) === winner ? String(third["Player 2"]) : String(third["Player 1"]));
+  }
   for (let round = last - 1; round >= 1; round--) {
     matches.filter((match) => match.round === round && match.winner)
       .forEach((match) => placed.push(match.p1 === match.winner ? match.p2 : match.p1));
