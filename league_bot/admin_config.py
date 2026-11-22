@@ -22,6 +22,8 @@ class AdminConfig:
     timezone: str = "Europe/Amsterdam"
     # Tournament announcements (now on stream, results, starting soon) in the announcement channel.
     tournament_announcements: bool = True
+    # "all", or "results": only results and "now on stream" (no "starting soon" or schedule updates).
+    tournament_announcement_mode: str = "all"
 
 
 def encode_topic(config: AdminConfig) -> str:

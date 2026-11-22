@@ -18,6 +18,7 @@ from .announcements import (
     HIDDEN_PREFIX,
     NOT_PUBLIC,
     announcements as tournament_announcements,
+    kinds_for as announcement_kinds,
     baseline as announcement_baseline,
     is_hidden,
     results_text,
@@ -228,9 +229,10 @@ class LowlandsClient(discord.Client):
                 else:
                     tournament_config = payload.get("config") or {}
                     stream_url = str(tournament_config.get("Stream URL") or "")
-                    messages, state = tournament_announcements(state, matches, now, stream_url)
                     guild = self.get_guild(self.guild_id)
                     config = await read_admin_config(guild) if guild else AdminConfig()
+                    kinds = announcement_kinds(config.tournament_announcement_mode)
+                    messages, state = tournament_announcements(state, matches, now, stream_url, kinds)
                     hidden = is_hidden(tournament_config)
                     if hidden:
                         # Practice run: the same messages, but only in the admin-only configuration channel.
@@ -1136,13 +1138,14 @@ async def handle_prefix_command(message: discord.Message) -> None:
             if not is_admin(message.author):
                 await message.reply("This command is only available to server administrators.", mention_author=False)
                 return
-            if argument.casefold() not in {"true", "false", "on", "off", "aan", "uit"}:
-                await message.reply("Usage: `!tournamentannouncements <on|off>`", mention_author=False)
+            choice = ANNOUNCEMENT_WORDS.get(argument.casefold())
+            if choice is None:
+                await message.reply("Usage: `!tournamentannouncements <on|results|off>`", mention_author=False)
                 return
             config = await read_admin_config(message.guild)
-            config.tournament_announcements = argument.casefold() in {"true", "on", "aan"}
+            set_announcement_mode(config, choice)
             await write_admin_config(message.guild, config)
-            await message.reply(f"Tournament announcements are now {'on' if config.tournament_announcements else 'off'}.", mention_author=False)
+            await message.reply(announcement_mode_text(config), mention_author=False)
         elif command == "rules":
             payload = await asyncio.to_thread(client.tournament.bracket)
             await message.reply(embed=tournament_rules_embed(payload), mention_author=False)
@@ -1633,16 +1636,46 @@ async def uitslagen(interaction: discord.Interaction) -> None:
     await results.callback(interaction)
 
 
-@client.tree.command(name="tournamentannouncements", description="Turn automatic tournament announcements on or off")
+# Words for the announcement setting: "on" = everything, "results" = only results and now on stream, "off" = nothing.
+ANNOUNCEMENT_WORDS = {
+    "true": "all", "on": "all", "aan": "all", "all": "all", "alles": "all",
+    "results": "results", "result": "results", "uitslagen": "results",
+    "false": "off", "off": "off", "uit": "off",
+}
+
+
+def set_announcement_mode(config: AdminConfig, choice: str) -> None:
+    config.tournament_announcements = choice != "off"
+    if choice != "off":
+        config.tournament_announcement_mode = choice
+
+
+def announcement_mode_text(config: AdminConfig) -> str:
+    if not config.tournament_announcements:
+        return "Tournament announcements are now off."
+    if config.tournament_announcement_mode == "results":
+        return "Tournament announcements are now on for results and now on stream only (no starting soon or schedule updates)."
+    return "Tournament announcements are now on (all messages)."
+
+
+@client.tree.command(name="tournamentannouncements", description="Choose which automatic tournament announcements the bot posts")
 @app_commands.default_permissions(administrator=True)
-async def tournamentannouncements(interaction: discord.Interaction, enabled: bool) -> None:
+@app_commands.describe(mode="All messages, only results (and now on stream), or off")
+@app_commands.choices(
+    mode=[
+        app_commands.Choice(name="All", value="all"),
+        app_commands.Choice(name="Results only", value="results"),
+        app_commands.Choice(name="Off", value="off"),
+    ]
+)
+async def tournamentannouncements(interaction: discord.Interaction, mode: app_commands.Choice[str]) -> None:
     if not is_admin(interaction.user) or interaction.guild is None:
         return
     await interaction.response.defer(ephemeral=True)
     config = await read_admin_config(interaction.guild)
-    config.tournament_announcements = enabled
+    set_announcement_mode(config, mode.value)
     await write_admin_config(interaction.guild, config)
-    await interaction.followup.send(f"Tournament announcements are now {'on' if enabled else 'off'}.", ephemeral=True)
+    await interaction.followup.send(announcement_mode_text(config), ephemeral=True)
 
 
 @client.tree.command(name="rules", description="Open the current tournament regulations")

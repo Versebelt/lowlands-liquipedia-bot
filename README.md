@@ -235,9 +235,11 @@ announcement channel, without mentions, party links or Discord IDs:
 - **Now on stream** when a highlighted match is released (or goes live), with the match or tournament `Stream URL`.
 - **Result** when a match is resolved, winner first, plus the winner's next opponent when that is known.
 - **Starting soon** fifteen minutes before `Scheduled At`.
+- **Schedule update** when the broadcast's `Expected At` moves the start ten minutes or more from `Scheduled At`.
 
 The first poll after a restart is a baseline, so a restart never repeats old messages. Admins switch this with
-`/tournamentannouncements true|false` (or `!toernooimeldingen aan|uit`); the setting lives in the same private
+`/tournamentannouncements All|Results only|Off` (or `!toernooimeldingen aan|uitslagen|uit`). "Results only" keeps
+the results and "now on stream" and drops "starting soon" and the schedule updates. The setting lives in the same private
 configuration channel as the reminders. Anyone can list the completed matches with `/results`, `/uitslagen`,
 `!results` or `!uitslagen`.
 

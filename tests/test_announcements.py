@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from league_bot.announcements import HIDDEN_PREFIX, announcements, baseline, is_hidden, next_opponent, results_text
+from league_bot.announcements import HIDDEN_PREFIX, RESULTS_ONLY, announcements, baseline, is_hidden, kinds_for, next_opponent, results_text
 
 NOW = datetime(2026, 11, 5, 19, 0, tzinfo=timezone.utc)
 
@@ -42,6 +42,32 @@ class AnnouncementTests(unittest.TestCase):
         self.assertTrue(messages[2].startswith("**Starting soon:** Dirk vs Fien"))
         again, _ = announcements(state, after, NOW)
         self.assertEqual(again, [], "every moment only once")
+
+    def test_results_only_skips_reminders_and_schedule_updates_for_good(self):
+        scheduled = NOW + timedelta(minutes=40)
+        before = [
+            match("M1", "Anna", "Bas", highlighted=True, status="Waiting for broadcast"),
+            match("M2", "Cor", "Eva", status="Live", series_score="1-1"),
+            match("M3", "Dirk", "Fien", status="Waiting for players", scheduled_at=scheduled.isoformat()),
+        ]
+        state = baseline(before, NOW)
+        after = [
+            match("M1", "Anna", "Bas", highlighted=True, admin_released=True, status="Ready to start"),
+            match("M2", "Cor", "Eva", status="Complete", winner="Eva", series_score="1-2"),
+            match("M3", "Dirk", "Fien", status="Waiting for players", scheduled_at=scheduled.isoformat(),
+                  expected_at=(NOW + timedelta(minutes=10)).isoformat()),
+        ]
+        messages, state = announcements(state, after, NOW, kinds=RESULTS_ONLY)
+        self.assertEqual(len(messages), 2)
+        self.assertTrue(messages[0].startswith("**Now on stream:**"))
+        self.assertTrue(messages[1].startswith("**Result:**"))
+        again, _ = announcements(state, after, NOW)
+        self.assertEqual(again, [], "switching back to all messages does not post the skipped ones later")
+
+    def test_mode_names(self):
+        self.assertEqual(kinds_for("results"), RESULTS_ONLY)
+        self.assertEqual(kinds_for("all"), kinds_for(None))
+        self.assertEqual(kinds_for("nonsense"), kinds_for("all"))
 
     def test_schedule_shift_from_the_broadcast_once_per_shift(self):
         scheduled = NOW + timedelta(hours=1)

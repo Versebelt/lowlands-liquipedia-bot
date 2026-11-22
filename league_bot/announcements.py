@@ -17,6 +17,16 @@ REMINDER_BEFORE = timedelta(minutes=15)
 # Scheduled At the bot tells the players, and again only after another shift of at least this much.
 SHIFT_NOTICE = timedelta(minutes=10)
 EMPTY = {"", "TBD", "BYE"}
+# Which messages the bot posts. "results" keeps the results and "now on stream", without "starting soon" and the
+# schedule updates (handy when the evening runs late and the broadcast keeps shifting the expected times).
+ALL_KINDS = frozenset({"stream", "result", "shift", "reminder"})
+RESULTS_ONLY = frozenset({"stream", "result"})
+MODES = {"all": ALL_KINDS, "results": RESULTS_ONLY}
+
+
+def kinds_for(mode: str | None) -> frozenset[str]:
+    """The message kinds for an announcement mode ("all" or "results"); anything unknown means all."""
+    return MODES.get(str(mode or "").casefold(), ALL_KINDS)
 
 
 @dataclass
@@ -143,10 +153,14 @@ def next_opponent(matches: list[dict[str, Any]], winner: str, after: str) -> str
 
 
 def announcements(
-    state: State, matches: list[dict[str, Any]], now: datetime, stream_url: str = ""
+    state: State, matches: list[dict[str, Any]], now: datetime, stream_url: str = "", kinds: frozenset[str] = ALL_KINDS
 ) -> tuple[list[str], State]:
-    """New messages since the previous poll, and the updated state."""
+    """New messages since the previous poll, and the updated state.
+
+    Kinds left out of `kinds` are still marked as done, so switching back to all messages never posts old ones.
+    """
     messages: list[str] = []
+    post = lambda kind, text: messages.append(text) if kind in kinds else None  # noqa: E731
     new_state: State = {}
     for match in matches:
         match_id = str(match.get("match_id") or "")
@@ -160,7 +174,7 @@ def announcements(
             done.add("stream")
             url = _https(match.get("stream_url")) or _https(stream_url)
             text = f"**Now on stream:** {one} vs {two}" + (f" ({details})" if details else "")
-            messages.append(text + (f"\nWatch live: <{url}>" if url else ""))
+            post("stream", text + (f"\nWatch live: <{url}>" if url else ""))
         if _is_result(match) and "result" not in done:
             done.add("result")
             winner = str(match.get("winner")).strip()
@@ -171,7 +185,7 @@ def announcements(
                 score = "-".join(reversed(score.split("-", 1)))
             text = f"**Result:** **{winner}** beats {loser}" + (f" {score}" if score else "") + (f" ({round_name})" if round_name else "") + "."
             opponent = next_opponent(matches, winner, match_id)
-            messages.append(text + (f" Next up for {winner}: {opponent}." if opponent else ""))
+            post("result", text + (f" Next up for {winner}: {opponent}." if opponent else ""))
         shift = _shift(match)
         if (_playable(match) and shift and shift > now and str(match.get("status") or "") in PRE_START
                 and not _shift_told(done, shift)):
@@ -179,12 +193,12 @@ def announcements(
             scheduled = _scheduled(match)
             word = "later" if scheduled and shift > scheduled else "earlier"
             planned = f" (planned <t:{int(scheduled.timestamp())}:t>)" if scheduled else ""
-            messages.append(f"**Schedule update:** {one} vs {two} now starts {word}, around <t:{int(shift.timestamp())}:t>{planned}.")
+            post("shift", f"**Schedule update:** {one} vs {two} now starts {word}, around <t:{int(shift.timestamp())}:t>{planned}.")
         if _playable(match) and _reminder_due(match, now) and "reminder" not in done:
             done.add("reminder")
             start = _start(match)
             when = f"<t:{int(start.timestamp())}:t>" if start else ""
-            messages.append(f"**Starting soon:** {one} vs {two}" + (f" ({details})" if details else "") + (f" at {when}." if when else "."))
+            post("reminder", f"**Starting soon:** {one} vs {two}" + (f" ({details})" if details else "") + (f" at {when}." if when else "."))
         new_state[match_id] = MatchState(done)
     return messages, new_state
 
